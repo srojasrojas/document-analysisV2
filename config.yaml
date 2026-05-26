@@ -1,0 +1,56 @@
+paths:
+  input_dir: data/input
+  output_dir: data/output
+  reports_dir: reports
+  changes_report: reports/changes.jsonl
+  registry_report: reports/registro_cambios.xlsx
+  reference_excel: tmp/referencia.xlsx
+  reference_summary: reports/referencia_resumen.md
+
+models:
+  active: openai_api
+  profiles:
+    openai_api:
+      provider: openai
+      api_key_env: OPENAI_API_KEY
+      model_env: OPENAI_MODEL
+      default_model: gpt-5.4-nano
+      temperature: 0.0
+    deepseek-r1-distill-14b-local:
+      provider: openai_compatible
+      base_url_env: LOCAL_LLM_BASE_URL
+      default_base_url: http://192.168.0.24:11434/v1
+      api_key_env: LOCAL_LLM_API_KEY
+      default_api_key: ollama
+      model_env: LOCAL_LLM_MODEL
+      default_model: deepseek-r1:14b
+      temperature: 0.0
+
+pipeline:
+  max_passes: 3
+  use_llm_refine: true
+  overwrite_output: false
+  skip_heading_styles: true
+  dry_run_keeps_output: false
+
+rules:
+  - id: operator_spence_expansion
+    enabled: true
+    description: Expand operator responsibility to Spence-designated personnel.
+    target_phrase: personal designado por minera Spence
+    connector: o
+    detection_regex: "(?i)(?<![A-Za-z0-9_])operador(?:a|es|as)?(?:\\s+(?:(?:de|del)\\s+)?(?:planta(?:\\s+concentradora)?|equipo|terreno|sala(?:\\s+de\\s+control)?|control|zona\\s+aut[oó]noma|puente\\s+gr[uú]a|cam[ií]on|camioneta|mina|[aá]rea|proceso|procesos|chancado|molienda|flotaci[oó]n|relaves|maquinaria|operaciones))?(?![A-Za-z0-9_])"
+    skip_when_target_present_in_paragraph: false
+    skip_when_existing_alternative_after_match: true
+    existing_alternative_regex: "(?i)^\\s*(?:o|/|y/o)\\s+(?!personal\\s+designado\\s+por\\s+minera\\s+Spence)"
+    review_only_regexes:
+      - "(?i)\\bperfil\\s+del\\s+operador\\b"
+      - "(?i)\\breemplazos?\\s+de\\s+operador\\b"
+
+llm_refine:
+  gate_prompt: prompts/operator_gate.md
+  constructor_prompt: prompts/operator_constructor.md
+  max_tokens: 700
+  candidate_regex: "(?i)(?<![A-Za-z0-9_])operador(?:a|es|as)?(?![A-Za-z0-9_])"
+  min_original_overlap_ratio: 0.65
+  max_length_ratio: 1.8

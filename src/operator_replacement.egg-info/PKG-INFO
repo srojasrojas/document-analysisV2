@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: operator-replacement
+Version: 0.1.0
+Summary: Configurable DOCX operator responsibility expansion workflow
+Requires-Python: >=3.11
