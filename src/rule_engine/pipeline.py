@@ -14,7 +14,7 @@ from .rules import ReplacementRule, load_rules
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Expand operator mentions in editable DOCX files.")
+    parser = argparse.ArgumentParser(description="Apply configurable replacement rules to editable DOCX files.")
     parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
     parser.add_argument("--input", type=Path, help="DOCX file or directory. Defaults to paths.input_dir")
     parser.add_argument("--output", type=Path, help="Output directory. Defaults to paths.output_dir")
@@ -56,13 +56,6 @@ def _prepare_working_copy(input_path: Path, output_path: Path, *, force: bool, d
     return output_path
 
 
-def _primary_target_phrase(rules: list[ReplacementRule]) -> str:
-    for rule in rules:
-        if rule.enabled:
-            return rule.target_phrase
-    return "personal designado por minera Spence"
-
-
 def _run_rule_pass(
     *,
     doc_path: Path,
@@ -98,6 +91,7 @@ def _run_rule_pass(
                         original_text=current_text,
                         modified_text=decision.modified_text,
                         rule_id=rule.id,
+                        rule_category=rule.category,
                         source="rule",
                         reason=decision.reason,
                     )
@@ -115,6 +109,7 @@ def _run_rule_pass(
                         text=current_text,
                         rule_id=rule.id,
                         reason=decision.reason,
+                        skip_type=decision.skip_type,
                     )
                 )
 
@@ -129,7 +124,7 @@ def _run_llm_pass(
     document_name: str,
     pass_index: int,
     llm_refiner: LlmRefiner,
-    target_phrase: str,
+    rules: list[ReplacementRule],
     dry_run: bool,
 ) -> tuple[list[ChangeRecord], list[SkipRecord], PassSummary]:
     doc = load_docx(doc_path)
@@ -142,56 +137,61 @@ def _run_llm_pass(
         return changes, skips, summary
 
     for element in elements:
-        text = element.text
-        if target_phrase.lower() in text.lower():
-            continue
-        if not llm_refiner.has_candidate(text):
-            continue
-        summary.llm_attempted += 1
-        try:
-            result = llm_refiner.refine(text, target_phrase)
-        except Exception as exc:  # noqa: BLE001
-            skips.append(
-                SkipRecord(
-                    document_name=document_name,
-                    pass_index=pass_index,
-                    location=element.location,
-                    text=text,
-                    rule_id="llm_refine",
-                    reason=str(exc),
-                    source="llm",
+        current_text = element.text
+        for rule in rules:
+            if not rule.enabled or not rule.llm.enabled or not rule.has_candidate(current_text):
+                continue
+            if rule.target_phrase.lower() in current_text.lower():
+                continue
+            summary.llm_attempted += 1
+            try:
+                result = llm_refiner.refine_for_rule(current_text, rule)
+            except Exception as exc:  # noqa: BLE001
+                skips.append(
+                    SkipRecord(
+                        document_name=document_name,
+                        pass_index=pass_index,
+                        location=element.location,
+                        text=current_text,
+                        rule_id=rule.id,
+                        reason=str(exc),
+                        skip_type="llm_error",
+                        source="llm",
+                    )
                 )
-            )
-            continue
-        if result.changed:
-            changes.append(
-                ChangeRecord(
-                    document_name=document_name,
-                    pass_index=pass_index,
-                    location=element.location,
-                    original_text=text,
-                    modified_text=result.modified_text,
-                    rule_id="llm_refine",
-                    source="llm",
-                    reason=result.reason,
+                continue
+            if result.changed:
+                changes.append(
+                    ChangeRecord(
+                        document_name=document_name,
+                        pass_index=pass_index,
+                        location=element.location,
+                        original_text=current_text,
+                        modified_text=result.modified_text,
+                        rule_id=rule.id,
+                        rule_category=rule.category,
+                        source="llm",
+                        reason=result.reason,
+                    )
                 )
-            )
-            summary.llm_changed += 1
-            summary.changed += 1
-            if not dry_run:
-                apply_surgical_change(element, result.modified_text)
-        else:
-            skips.append(
-                SkipRecord(
-                    document_name=document_name,
-                    pass_index=pass_index,
-                    location=element.location,
-                    text=text,
-                    rule_id="llm_refine",
-                    reason=result.reason,
-                    source="llm",
+                summary.llm_changed += 1
+                summary.changed += 1
+                current_text = result.modified_text
+                if not dry_run:
+                    apply_surgical_change(element, current_text)
+            else:
+                skips.append(
+                    SkipRecord(
+                        document_name=document_name,
+                        pass_index=pass_index,
+                        location=element.location,
+                        text=current_text,
+                        rule_id=rule.id,
+                        reason=result.reason,
+                        skip_type="llm_gate_or_validation",
+                        source="llm",
+                    )
                 )
-            )
 
     if changes and not dry_run:
         save_docx(doc, doc_path)
@@ -219,7 +219,6 @@ def run_document(
     summaries: list[PassSummary] = []
 
     skip_heading_styles = bool(config.get("pipeline", {}).get("skip_heading_styles", True))
-    target_phrase = _primary_target_phrase(rules)
     use_llm = bool(config.get("pipeline", {}).get("use_llm_refine", False)) and not simple_only
     llm_refiner = None
     if use_llm:
@@ -243,7 +242,7 @@ def run_document(
                 document_name=input_path.name,
                 pass_index=pass_index,
                 llm_refiner=llm_refiner,
-                target_phrase=target_phrase,
+                rules=rules,
                 dry_run=dry_run,
             )
             all_changes.extend(llm_changes)

@@ -57,6 +57,7 @@ def write_registry(
         "pass_index",
         "location",
         "rule_id",
+        "rule_category",
         "source",
         "reason",
         "original_text",
@@ -68,17 +69,17 @@ def write_registry(
     for row_index, row in enumerate(rows, start=1):
         for column, header in enumerate(change_headers):
             changes_sheet.write(row_index, column, row.get(header, ""), wrap_format)
-    changes_sheet.set_column(0, 5, 24)
-    changes_sheet.set_column(6, 7, 70)
-    changes_sheet.set_column(8, 8, 22)
+    changes_sheet.set_column(0, 6, 24)
+    changes_sheet.set_column(7, 8, 70)
+    changes_sheet.set_column(9, 9, 22)
 
-    skip_headers = ["document_name", "pass_index", "location", "rule_id", "source", "reason", "text"]
+    skip_headers = ["document_name", "pass_index", "location", "rule_id", "source", "skip_type", "reason", "text"]
     for column, header in enumerate(skip_headers):
         skips_sheet.write(0, column, header, header_format)
     for row_index, skip in enumerate(skips, start=1):
         row = skip.to_dict()
         for column, header in enumerate(skip_headers):
             skips_sheet.write(row_index, column, row.get(header, ""), wrap_format)
-    skips_sheet.set_column(0, 5, 24)
-    skips_sheet.set_column(6, 6, 90)
+    skips_sheet.set_column(0, 6, 24)
+    skips_sheet.set_column(7, 7, 90)
     workbook.close()

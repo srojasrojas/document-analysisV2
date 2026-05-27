@@ -22,6 +22,7 @@ class ChangeRecord:
     original_text: str
     modified_text: str
     rule_id: str
+    rule_category: str
     source: str
     reason: str
     changed_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
@@ -38,6 +39,7 @@ class SkipRecord:
     text: str
     rule_id: str
     reason: str
+    skip_type: str = "guard"
     source: str = "rule"
 
     def to_dict(self) -> dict[str, Any]:

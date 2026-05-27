@@ -7,7 +7,7 @@ from docx import Document
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-OUTPUT_PATH = PROJECT_ROOT / "data" / "input" / "mock_operador.docx"
+OUTPUT_PATH = PROJECT_ROOT / "data" / "input" / "mock_reglas.docx"
 SAMPLES_PATH = PROJECT_ROOT / "reports" / "referencia_operador_samples.jsonl"
 
 
@@ -35,7 +35,8 @@ def _load_reference_examples(limit: int = 3) -> list[str]:
             except json.JSONDecodeError:
                 continue
             text = str(record.get("text", "")).strip()
-            if text:
+            lowered = text.lower()
+            if text and "supervisor" not in lowered and "one-up" not in lowered:
                 examples.append(text[:260])
     return examples
 
@@ -43,7 +44,7 @@ def _load_reference_examples(limit: int = 3) -> list[str]:
 def main() -> int:
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     doc = Document()
-    doc.add_heading("Mock procedimiento operador", level=1)
+    doc.add_heading("Mock procedimiento reglas", level=1)
     doc.add_paragraph(
         "Documento editable de prueba para validar cambios de cargos responsables en tablas y parrafos."
     )
@@ -94,6 +95,42 @@ def main() -> int:
     _add_row(
         table,
         [
+            "Coordinacion segura",
+            "supervisor de operaciones",
+            "El supervisor de operaciones debe coordinar el ingreso al area restringida.",
+            "Ingreso controlado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Comunicacion de evento",
+            "operador planta",
+            "El operador planta debe informar al supervisor de turno cualquier desviacion critica.",
+            "Evento comunicado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Caso supervisor ya expandido",
+            "supervisor o Ejecutivos del Área",
+            "El supervisor o Ejecutivos del Área autoriza la continuidad de la tarea.",
+            "Sin duplicados.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Supervisor exento",
+            "Supervisor Sala de Control",
+            "El Supervisor Sala de Control monitorea las variables desde CAS.",
+            "Sin cambio por excepcion.",
+        ],
+    )
+    _add_row(
+        table,
+        [
             "Caso ya expandido",
             "operador o personal designado por minera Spence",
             "El operador o personal designado por minera Spence confirma la disponibilidad del equipo.",
@@ -133,6 +170,8 @@ def main() -> int:
     doc.add_heading("2. Apariciones fuera de tabla", level=2)
     doc.add_paragraph("La operadora debe cerrar la actividad en el sistema de turno.")
     doc.add_paragraph("Los operadores de planta revisan la comunicacion radial antes de iniciar.")
+    doc.add_paragraph("La supervisora de turno revisa las condiciones generales antes de liberar el equipo.")
+    doc.add_paragraph("El jefe de área debe validar que el permiso de trabajo este vigente.")
 
     reference_examples = _load_reference_examples()
     if reference_examples:

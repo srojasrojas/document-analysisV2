@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "operator-replacement"
+name = "docx-rule-engine"
 version = "0.1.0"
-description = "Configurable DOCX operator responsibility expansion workflow"
+description = "Configurable multi-rule DOCX replacement and expansion workflow"
 requires-python = ">=3.11"
 dependencies = []
 
