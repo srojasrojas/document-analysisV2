@@ -141,6 +141,9 @@ def _run_llm_pass(
         for rule in rules:
             if not rule.enabled or not rule.llm.enabled or not rule.has_candidate(current_text):
                 continue
+            preflight = rule.apply(current_text)
+            if preflight.changed or preflight.skipped or preflight.already_expanded:
+                continue
             if rule.target_phrase.lower() in current_text.lower():
                 continue
             summary.llm_attempted += 1

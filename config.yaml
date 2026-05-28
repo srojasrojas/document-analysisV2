@@ -90,6 +90,8 @@ rules:
         - "(?i)\\bduplicar\\s+responsabilidades\\b"
         - "(?i)\\bone-up\\b"
         - "(?i)\\bsecci[oó]n\\s+roles\\s+y\\s+responsabilidades\\b"
+      review_only_full_text_patterns:
+        - "(?is)^\\s*(?:supervisor(?:a|es|as)?|jefe\\s+de\\s+[aá]rea|due[ñn]o\\s+de\\s+[aá]rea)(?!.*\\b(?:debe|deber[aá]|informa(?:r)?|coordina(?:r)?|autoriza(?:r)?|solicita(?:r)?|valida(?:r)?|revisa(?:r)?|realiza(?:r)?|avisa(?:r)?|monitorea(?:r)?|recibe(?:r)?|programa(?:r)?|gestiona(?:r)?|detiene(?:r)?|bloquea(?:r)?|comunica(?:r)?)\\b).{0,120}$"
     llm_refining:
       enabled: true
       gate_prompt: prompts/rules/supervisor_gate.md

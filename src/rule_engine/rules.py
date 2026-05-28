@@ -39,6 +39,7 @@ class GuardConfig:
     skip_if_alternative_exists: bool
     alternative_pattern: str | None
     review_only_patterns: tuple[str, ...]
+    review_only_full_text_patterns: tuple[str, ...]
     exempt_context_patterns: tuple[str, ...]
     exempt_window_chars: int
 
@@ -80,6 +81,9 @@ class ReplacementRule:
             skip_if_alternative_exists=bool(guards_cfg.get("skip_if_alternative_exists", True)),
             alternative_pattern=guards_cfg.get("alternative_pattern"),
             review_only_patterns=tuple(str(pattern) for pattern in guards_cfg.get("review_only_patterns", [])),
+            review_only_full_text_patterns=tuple(
+                str(pattern) for pattern in guards_cfg.get("review_only_full_text_patterns", [])
+            ),
             exempt_context_patterns=tuple(
                 str(pattern) for pattern in guards_cfg.get("exempt_context_patterns", [])
             ),
@@ -103,6 +107,9 @@ class ReplacementRule:
         self.review_only_patterns = [
             re.compile(pattern) for pattern in self.guards.review_only_patterns
         ]
+        self.review_only_full_text_patterns = [
+            re.compile(pattern) for pattern in self.guards.review_only_full_text_patterns
+        ]
         self.exempt_context_patterns = [
             re.compile(pattern) for pattern in self.guards.exempt_context_patterns
         ]
@@ -120,7 +127,9 @@ class ReplacementRule:
         return bool(self.pattern.search(text))
 
     def _is_review_only(self, match_text: str, full_text: str) -> bool:
-        return any(pattern.search(match_text) or pattern.search(full_text) for pattern in self.review_only_patterns)
+        if any(pattern.search(match_text) or pattern.search(full_text) for pattern in self.review_only_patterns):
+            return True
+        return any(pattern.search(full_text) for pattern in self.review_only_full_text_patterns)
 
     def _is_exempt_context(self, full_text: str, match: re.Match[str]) -> bool:
         if not self.exempt_context_patterns:
