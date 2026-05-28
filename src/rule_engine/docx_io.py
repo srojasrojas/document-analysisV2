@@ -3,18 +3,36 @@ from __future__ import annotations
 import difflib
 import re
 import unicodedata
-from collections.abc import Iterable
 from pathlib import Path
 
 from docx import Document
 from docx.document import Document as DocxDocument
-from docx.table import _Cell, Table
+from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 
 from .models import DocxElement
 
 
 HEADING_STYLES = {"heading 1", "heading 2", "heading 3", "heading 4", "title", "subtitle"}
+ACTION_SECTION_HINTS = {
+    "alcance",
+    "definiciones",
+    "desarrollo",
+    "descripcion",
+    "ejecucion",
+    "instrucciones",
+    "objetivo",
+    "procedimiento",
+    "registros",
+    "responsabilidades",
+    "roles",
+}
+
+
+def _is_registros_title(text: str) -> bool:
+    normalized = normalize_text(text)
+    normalized = re.sub(r"^\d+(?:\.\d+)*\s*[-.)]?\s*", "", normalized)
+    return bool(re.fullmatch(r"(?:anexos?\s+)?registros?", normalized))
 
 
 def normalize_text(text: str) -> str:
@@ -38,52 +56,150 @@ def is_heading(paragraph: Paragraph) -> bool:
     return (paragraph.style.name or "").lower() in HEADING_STYLES
 
 
-def _iter_cell_paragraphs(cell: _Cell, table_location: str) -> Iterable[tuple[str, Paragraph]]:
-    for paragraph_index, paragraph in enumerate(cell.paragraphs):
-        yield f"{table_location}:p{paragraph_index}", paragraph
+def _looks_like_section_title(text: str, paragraph: Paragraph | None = None) -> bool:
+    stripped = re.sub(r"\s+", " ", text or "").strip(" .:\t\r\n")
+    if not stripped or len(stripped) > 120:
+        return False
+    if paragraph is not None and is_heading(paragraph):
+        return True
 
-    for nested_index, nested_table in enumerate(cell.tables):
-        nested_prefix = f"{table_location}:table[{nested_index}]"
-        for row_index, row in enumerate(nested_table.rows):
-            for cell_index, nested_cell in enumerate(row.cells):
-                nested_location = f"{nested_prefix}[{row_index}][{cell_index}]"
-                yield from _iter_cell_paragraphs(nested_cell, nested_location)
+    normalized = normalize_text(stripped)
+    without_number = re.sub(r"^\d+(?:\.\d+)*\s*[-.)]?\s*", "", normalized)
+    if without_number in ACTION_SECTION_HINTS:
+        return True
+    if _is_registros_title(without_number):
+        return True
+
+    letters = [char for char in stripped if char.isalpha()]
+    if letters and sum(char.isupper() for char in letters) / len(letters) >= 0.8:
+        return len(stripped.split()) <= 10
+    return False
+
+
+def _is_excluded_section(section_path: tuple[str, ...]) -> bool:
+    return any(_is_registros_title(section) for section in section_path)
+
+
+def _append_element(
+    elements: list[DocxElement],
+    *,
+    paragraph: Paragraph,
+    location: str,
+    block_type: str,
+    section_path: tuple[str, ...],
+    table_index: int | None = None,
+    row_index: int | None = None,
+    cell_index: int | None = None,
+) -> None:
+    text = paragraph.text
+    if not text.strip():
+        return
+    paragraph_is_heading = is_heading(paragraph) or _looks_like_section_title(text, paragraph)
+    element_section_path = section_path
+    if paragraph_is_heading and not section_path or (
+        paragraph_is_heading and normalize_text(text) not in {normalize_text(section) for section in section_path}
+    ):
+        element_section_path = (*section_path, re.sub(r"\s+", " ", text).strip())
+
+    elements.append(
+        DocxElement(
+            text=text,
+            normalized=normalize_text(text),
+            location=location,
+            paragraph_obj=paragraph,
+            is_heading=paragraph_is_heading,
+            block_type=block_type,
+            section_path=element_section_path,
+            in_excluded_section=_is_excluded_section(element_section_path),
+            table_index=table_index,
+            row_index=row_index,
+            cell_index=cell_index,
+        )
+    )
+
+
+def _iter_table_elements(
+    *,
+    doc: DocxDocument,
+    table_element,
+    table_location: str,
+    table_index: int | None,
+    section_path: tuple[str, ...],
+) -> list[DocxElement]:
+    elements: list[DocxElement] = []
+    local_section_path = section_path
+
+    for row_index, row in enumerate(table_element.findall(qn("w:tr"))):
+        row_section_path = local_section_path
+        cells = row.findall(qn("w:tc"))
+        for cell_index, cell in enumerate(cells):
+            cell_location = f"{table_location}[{row_index}][{cell_index}]"
+            paragraph_index = 0
+            nested_table_index = 0
+            for child in cell.iterchildren():
+                if child.tag == qn("w:p"):
+                    paragraph = Paragraph(child, doc)
+                    text = paragraph.text
+                    if _looks_like_section_title(text, paragraph):
+                        row_section_path = (*local_section_path, re.sub(r"\s+", " ", text).strip())
+                    _append_element(
+                        elements,
+                        paragraph=paragraph,
+                        location=f"{cell_location}:p{paragraph_index}",
+                        block_type="table",
+                        section_path=row_section_path,
+                        table_index=table_index,
+                        row_index=row_index,
+                        cell_index=cell_index,
+                    )
+                    paragraph_index += 1
+                elif child.tag == qn("w:tbl"):
+                    nested_location = f"{cell_location}:table[{nested_table_index}]"
+                    elements.extend(
+                        _iter_table_elements(
+                            doc=doc,
+                            table_element=child,
+                            table_location=nested_location,
+                            table_index=table_index,
+                            section_path=row_section_path,
+                        )
+                    )
+                    nested_table_index += 1
+        if _is_excluded_section(row_section_path):
+            local_section_path = row_section_path
+    return elements
 
 
 def collect_elements(doc: DocxDocument) -> list[DocxElement]:
     elements: list[DocxElement] = []
+    section_path: tuple[str, ...] = ()
+    table_index = 0
+    paragraph_index = 0
 
-    for paragraph_index, paragraph in enumerate(doc.paragraphs):
-        text = paragraph.text
-        if not text.strip():
-            continue
-        elements.append(
-            DocxElement(
-                text=text,
-                normalized=normalize_text(text),
+    for child in doc.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            paragraph = Paragraph(child, doc)
+            if _looks_like_section_title(paragraph.text, paragraph):
+                section_path = (re.sub(r"\s+", " ", paragraph.text).strip(),)
+            _append_element(
+                elements,
+                paragraph=paragraph,
                 location=f"body:{paragraph_index}",
-                paragraph_obj=paragraph,
-                is_heading=is_heading(paragraph),
+                block_type="body",
+                section_path=section_path,
             )
-        )
-
-    for table_index, table in enumerate(doc.tables):
-        for row_index, row in enumerate(table.rows):
-            for cell_index, cell in enumerate(row.cells):
-                cell_location = f"table[{table_index}][{row_index}][{cell_index}]"
-                for location, paragraph in _iter_cell_paragraphs(cell, cell_location):
-                    text = paragraph.text
-                    if not text.strip():
-                        continue
-                    elements.append(
-                        DocxElement(
-                            text=text,
-                            normalized=normalize_text(text),
-                            location=location,
-                            paragraph_obj=paragraph,
-                            is_heading=is_heading(paragraph),
-                        )
-                    )
+            paragraph_index += 1
+        elif child.tag == qn("w:tbl"):
+            elements.extend(
+                _iter_table_elements(
+                    doc=doc,
+                    table_element=child,
+                    table_location=f"table[{table_index}]",
+                    table_index=table_index,
+                    section_path=section_path,
+                )
+            )
+            table_index += 1
 
     return elements
 

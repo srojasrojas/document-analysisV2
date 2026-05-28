@@ -4,6 +4,8 @@ paths:
   reports_dir: reports
   changes_report: reports/changes.jsonl
   registry_report: reports/registro_cambios.xlsx
+  audit_report_json: reports/auditoria_post_run.json
+  audit_report_excel: reports/auditoria_post_run.xlsx
   reference_excel: tmp/referencia.xlsx
   reference_summary: reports/referencia_resumen.md
 
@@ -21,10 +23,14 @@ models:
 
 pipeline:
   max_passes: 3
-  use_llm_refine: true
+  use_llm_refine: false
   overwrite_output: false
   skip_heading_styles: true
   dry_run_keeps_output: false
+  reset_reports_on_force: true
+  post_audit:
+    enabled: true
+    auto_repair: true
 
 llm_refine:
   model: deepseek-r1-distill-14b-local
@@ -38,21 +44,44 @@ rules:
     category: role_expansion
     description: Expand operator responsibility to Spence-designated personnel.
     detection:
-      regex: "(?i)(?<![A-Za-z0-9_])operador(?:a|es|as)?(?:\\s+(?:(?:de|del)\\s+)?(?:planta(?:\\s+concentradora)?|equipo|terreno|sala(?:\\s+de\\s+control)?|control|zona\\s+aut[oó]noma|puente\\s+gr[uú]a|cam[ií]on|camioneta|mina|[aá]rea|proceso|procesos|chancado|molienda|flotaci[oó]n|relaves|maquinaria|operaciones))?(?![A-Za-z0-9_])"
+      regex: "(?i)(?<![A-Za-z0-9_])operador(?:\\s*/\\s*a|\\s*\\([aA]\\)|a|es|as)?(?:\\s+a\\s+cargo)?(?:\\s+(?:(?:de|del)\\s+(?:(?:el|la|los|las)\\s+)?)?(?:planta(?:\\s+concentradora)?|equipos?|terreno|sala(?:\\s+de\\s+control)?|control|zona\\s+aut[oó]noma|puente\\s+gr[uú]a|gr[uú]a(?:\\s+horquilla)?|patio(?:\\s+de\\s+embarque)?|esparcidor|mini\\s*-?\\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\\s+frontal)?|retro\\s*-?\\s*excavadora(?:s)?|excavadora(?:s)?|cami[oó]n(?:\\s+tolva)?|camiones\\s+tolva|camioneta|mina|[aá]rea|proceso|procesos|chancado|molienda|flotaci[oó]n|relaves|maquinaria|operaciones|correas?|apilador(?:a)?|rotopalas?|picarocas|nave\\s+ew|c[aá]todos|sx|tf|cas))?(?:\\s+(?:autorizad[oa]s?|calificad[oa]s?|capacitad[oa]s?|certificad[oa]s?|competente(?:s)?|habilitad[oa]s?|acreditad[oa]s?|entrenad[oa]s?))?(?![A-Za-z0-9_])"
     replacement:
       mode: expansion
       target_phrase: personal designado por minera Spence
       connector: o
       format: "{matched} {connector} {target}"
+      conditional_targets:
+        - target_phrase: personal calificado
+          reason: qualification_or_technical_operator_context
+          context_window_chars: 180
+          patterns:
+            - "(?i)\\b(?:autorizad[oa]s?|calificad[oa]s?|capacitad[oa]s?|certificad[oa]s?|competente(?:s)?|habilitad[oa]s?|acreditad[oa]s?|entrenad[oa]s?)\\b"
+            - "(?i)\\b(?:bloqueo|bloquear|desbloqueo|desbloquear|loto|energizaci[oó]n|energizar|desenergizaci[oó]n|desenergizar|hmi|panel\\s+de\\s+control|reset|el[eé]ctric[oa]s?|instrumentaci[oó]n|mantenci[oó]n|calibraci[oó]n|calibrar|homologaci[oó]n|diagn[oó]stico)\\b"
     guards:
       skip_if_target_exists_in_paragraph: false
       skip_if_alternative_exists: true
-      alternative_pattern: "(?i)^\\s*(?:o|/|y/o)\\s+(?!personal\\s+designado\\s+por\\s+minera\\s+Spence)"
+      alternative_pattern: "(?i)^\\s*(?:o|/|y/o)\\s+(?!(?:personal\\s+designado\\s+por\\s+minera\\s+Spence|personal\\s+calificado))"
+      required_context_patterns:
+        - "(?i)\\b(?:debe(?:n|r[aá]n?|r[aá])?|realiza(?:r|n)?|revisa(?:r|n)?|verifica(?:r|n)?|detiene(?:r|n)?|opera(?:r|n)?|inspecciona(?:r|n)?|coordina(?:r|n)?|informa(?:r|n)?|avisa(?:r|n)?|solicita(?:r|n)?|autoriza(?:r|n)?|registra(?:r|n)?|bloquea(?:r|n)?|desbloquea(?:r|n)?|energiza(?:r|n)?|desenergiza(?:r|n)?|comunica(?:r|n)?)\\b"
+        - "(?i)\\b(?:dar|da|dando)\\s+aviso\\s+a\\b"
+        - "(?i)\\b(?:informar|avisar)\\s+a\\b"
+      required_context_window_chars: 180
+      exempt_context_patterns:
+        - "(?i)\\boperador(?:a|es|as)?\\s+sala\\b"
+        - "(?i)sala\\s+de\\s+control"
+        - "(?i)\\bCAS\\b"
+        - "(?i)\\bCIO\\b"
+      exempt_window_chars: 60
+      descriptor_order_repair_patterns:
+        - "(?:de\\s+(?:el|la|los|las)\\s+|de\\s+|del\\s+)?(?:retro\\s*-?\\s*excavadora(?:s)?|mini\\s*-?\\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\\s+frontal)?|cami[oó]n(?:es)?\\s+tolva|rotopalas?|equipos?|terreno|apilador(?:a)?|correas?|picarocas|gr[uú]a(?:\\s+horquilla)?|puente\\s+gr[uú]a)\\b"
+      excluded_section_patterns:
+        - "(?i)\\bregistros?\\b"
       review_only_patterns:
         - "(?i)\\bperfil\\s+del\\s+operador\\b"
         - "(?i)\\breemplazos?\\s+de\\s+operador\\b"
+      review_only_full_text_patterns: []
     llm_refining:
-      enabled: true
+      enabled: false
       gate_prompt: prompts/rules/operador_gate.md
       constructor_prompt: prompts/rules/operador_constructor.md
       validate_target_in_output: true
@@ -65,14 +94,14 @@ rules:
     category: role_expansion
     description: Expand supervisor responsibility to include Area Executives.
     detection:
-      regex: "(?i)(?<![A-Za-z0-9_])(?:supervisor(?:a)?\\s+(?:de|del)\\s+(?:turno|[aá]rea|operaciones?|mantenci[oó]n|producci[oó]n|planta|terreno|zona(?:\\s+aut[oó]noma)?|sala(?:\\s+de\\s+control)?)|supervisor\\s*\\([ae]\\)|jefe\\s+de\\s+[aá]rea|due[ñn]o\\s+de\\s+[aá]rea|supervisor(?:a|es|as)?)(?![A-Za-z0-9_])"
+      regex: "(?i)(?<![A-Za-z0-9_])(?:supervisor(?:a|es|as)?\\s+(?:de|del)\\s+(?:turno|[aá]rea(?:\\s+de\\s+(?:(?!\\b(?:debe|deber[aá]|para|si|cuando|y|o|u|ejecutivos?)\\b)[A-Za-zÁÉÍÓÚÑáéíóúñ&/.-]+)(?:\\s+(?:(?!\\b(?:debe|deber[aá]|para|si|cuando|y|o|u|ejecutivos?)\\b)[A-Za-zÁÉÍÓÚÑáéíóúñ&/.-]+)){0,5})?|[aá]rea\\s+seca|operaciones?(?:\\s+SPENCE)?|mantenci[oó]n|producci[oó]n|planta|terreno|zona(?:\\s+aut[oó]noma)?|sala(?:\\s+de\\s+control)?)|supervisor\\s*\\([ae]\\)|jefe\\s+de\\s+[aá]rea|due[ñn]o\\s+de\\s+[aá]rea|supervisor(?:a|es|as)?(?:\\s+(?!(?:de|del|el|la|los|las|un|una|debe|deber[aá]|para|si|cuando|y|o|u|que|quien|conozca(?:n)?|conocer|ejecutivos?)\\b)[A-Za-zÁÉÍÓÚÑáéíóúñ&/.-]+){0,4})(?![A-Za-z0-9_])"
     replacement:
       mode: expansion
       target_phrase: Ejecutivos del Área
       connector: o
       format: "{matched} {connector} {target}"
     guards:
-      skip_if_target_exists_in_paragraph: false
+      skip_if_target_exists_in_paragraph: true
       skip_if_alternative_exists: true
       alternative_pattern: "(?i)^\\s*(?:o|/|y/o)\\s+(?!Ejecutivos\\s+del\\s+[AÁ]rea)"
       exempt_context_patterns:
@@ -84,16 +113,20 @@ rules:
         - "(?i)\\bCAS\\b"
         - "(?i)\\bCIO\\b"
       exempt_window_chars: 40
+      excluded_section_patterns:
+        - "(?i)\\bregistros?\\b"
       review_only_patterns:
+        - "(?i)\\bse\\s+elimina\\b"
         - "(?i)\\bcaso\\s+supervisor\\b"
         - "(?i)\\bsupervisor\\s+exento\\b"
         - "(?i)\\bduplicar\\s+responsabilidades\\b"
         - "(?i)\\bone-up\\b"
         - "(?i)\\bsecci[oó]n\\s+roles\\s+y\\s+responsabilidades\\b"
       review_only_full_text_patterns:
+        - "(?is)\\bsupervisor(?:a|es|as)?\\s+de\\s*$"
         - "(?is)^\\s*(?:supervisor(?:a|es|as)?|jefe\\s+de\\s+[aá]rea|due[ñn]o\\s+de\\s+[aá]rea)(?!.*\\b(?:debe|deber[aá]|informa(?:r)?|coordina(?:r)?|autoriza(?:r)?|solicita(?:r)?|valida(?:r)?|revisa(?:r)?|realiza(?:r)?|avisa(?:r)?|monitorea(?:r)?|recibe(?:r)?|programa(?:r)?|gestiona(?:r)?|detiene(?:r)?|bloquea(?:r)?|comunica(?:r)?)\\b).{0,120}$"
     llm_refining:
-      enabled: true
+      enabled: false
       gate_prompt: prompts/rules/supervisor_gate.md
       constructor_prompt: prompts/rules/supervisor_constructor.md
       validate_target_in_output: true

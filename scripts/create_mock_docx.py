@@ -86,6 +86,78 @@ def main() -> int:
     _add_row(
         table,
         [
+            "Operador calificado",
+            "operador autorizado",
+            "El operador autorizado debe ejecutar el bloqueo local antes de intervenir el panel de control.",
+            "Debe usar personal calificado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Especialidad larga",
+            "operador de Apilador",
+            "El operador de Apilador debe detener la correa afectada y comunicar la desviacion.",
+            "Descriptor preservado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Equipo retroexcavadora",
+            "Operador retroexcavadora",
+            "El Operador retroexcavadora debe coordinar el retiro de material con el camion tolva.",
+            "Descriptor antes del target.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Equipo camion tolva",
+            "Operador de camion tolva",
+            "El Operador de camion tolva debe revisar el layout para cargar y descargar el mineral.",
+            "Descriptor compuesto preservado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Equipo mini cargador",
+            "Operador mini cargador",
+            "El Operador mini cargador debe retirar material por los costados con la correa detenida.",
+            "Descriptor compuesto preservado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Equipo rotopalas",
+            "operadores de Rotopalas",
+            "Los operadores de Rotopalas deben delimitar el area con conos y cadenas.",
+            "Plural preservado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Equipos genericos",
+            "operadores de los equipos",
+            "Los operadores de los equipos deben informar el inicio de la maniobra.",
+            "Articulo preservado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Formato genero",
+            "operador/a",
+            "El operador/a debe registrar la inspeccion final en el sistema.",
+            "Genero preservado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
             "Aviso operacional",
             "supervisor",
             "Ante alarma critica se debe informar al operador de sala para coordinar acciones.",
@@ -131,6 +203,15 @@ def main() -> int:
     _add_row(
         table,
         [
+            "Operador CAS exento",
+            "Operador CAS",
+            "El Operador CAS debe monitorear las variables desde sala de control.",
+            "Sin cambio por excepcion.",
+        ],
+    )
+    _add_row(
+        table,
+        [
             "Caso ya expandido",
             "operador o personal designado por minera Spence",
             "El operador o personal designado por minera Spence confirma la disponibilidad del equipo.",
@@ -170,8 +251,24 @@ def main() -> int:
     doc.add_heading("2. Apariciones fuera de tabla", level=2)
     doc.add_paragraph("La operadora debe cerrar la actividad en el sistema de turno.")
     doc.add_paragraph("Los operadores de planta revisan la comunicacion radial antes de iniciar.")
+    doc.add_paragraph("El operador(a) capacitado debe realizar reset en HMI cuando el procedimiento lo autorice.")
     doc.add_paragraph("La supervisora de turno revisa las condiciones generales antes de liberar el equipo.")
     doc.add_paragraph("El jefe de área debe validar que el permiso de trabajo este vigente.")
+
+    doc.add_heading("REGISTROS", level=2)
+    records_table = doc.add_table(rows=1, cols=3)
+    records_table.style = "Table Grid"
+    _set_cell_text(records_table.rows[0].cells[0], "Registro")
+    _set_cell_text(records_table.rows[0].cells[1], "Responsable")
+    _set_cell_text(records_table.rows[0].cells[2], "Nota")
+    _add_row(
+        records_table,
+        [
+            "Checklist operacional",
+            "operador",
+            "El operador debe firmar el registro al cierre, pero esta seccion no se modifica.",
+        ],
+    )
 
     reference_examples = _load_reference_examples()
     if reference_examples:

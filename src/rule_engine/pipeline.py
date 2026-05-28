@@ -1,16 +1,35 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import re
 import shutil
 import sys
 from pathlib import Path
 
 from .config import load_config, load_env_file, project_root_from_config, resolve_path
-from .docx_io import apply_surgical_change, collect_elements, load_docx, save_docx
+from .docx_io import apply_surgical_change, collect_elements, load_docx, normalize_text, save_docx
 from .llm_refine import LlmRefiner
 from .models import ChangeRecord, PassSummary, SkipRecord
-from .reporting import append_changes_jsonl, write_registry
+from .reporting import append_changes_jsonl, write_audit_report, write_registry
 from .rules import ReplacementRule, load_rules
+
+
+ACTION_VERB_RE = re.compile(
+    r"\b(?:debe(?:n)?|deber[aá]n?|deber[aá]|realiza(?:r|n)?|revisa(?:r|n)?|verifica(?:r|n)?|"
+    r"detiene(?:r|n)?|opera(?:r|n)?|inspecciona(?:r|n)?|coordina(?:r|n)?|informa(?:r|n)?|"
+    r"avisa(?:r|n)?|solicita(?:r|n)?|autoriza(?:r|n)?|registra(?:r|n)?|bloquea(?:r|n)?|"
+    r"desbloquea(?:r|n)?|energiza(?:r|n)?|desenergiza(?:r|n)?|comunica(?:r|n)?|"
+    r"asegura(?:r|n)?|conozca(?:n)?|da\s+aviso|dar[aá]?\s+aviso|dando\s+aviso)\b",
+    re.IGNORECASE,
+)
+REPAIRABLE_QA_FLAGS = {
+    "changed_in_registros",
+    "operator_cas_context",
+    "target_already_present_near_match",
+    "title_like_expansion",
+    "duplicate_target",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,6 +75,15 @@ def _prepare_working_copy(input_path: Path, output_path: Path, *, force: bool, d
     return output_path
 
 
+def _candidate_id(document_name: str, location: str, rule_id: str, text: str) -> str:
+    payload = f"{document_name}\0{location}\0{rule_id}\0{text}"
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _section_text(section_path: tuple[str, ...]) -> str:
+    return " > ".join(section_path)
+
+
 def _run_rule_pass(
     *,
     doc_path: Path,
@@ -78,7 +106,11 @@ def _run_rule_pass(
         for rule in rules:
             if not rule.enabled or not rule.has_candidate(current_text):
                 continue
-            decision = rule.apply(current_text)
+            decision = rule.apply(
+                current_text,
+                section_path=element.section_path,
+                in_excluded_section=element.in_excluded_section,
+            )
             summary.candidates += decision.candidates
             summary.already_expanded += decision.already_expanded
             summary.skipped += decision.skipped
@@ -94,6 +126,13 @@ def _run_rule_pass(
                         rule_category=rule.category,
                         source="rule",
                         reason=decision.reason,
+                        match_text=decision.match_text,
+                        selected_target=decision.selected_target,
+                        selector_reason=decision.selector_reason,
+                        context_excerpt=decision.context_excerpt,
+                        block_type=element.block_type,
+                        section_path=element.section_path,
+                        candidate_id=_candidate_id(document_name, element.location, rule.id, current_text),
                     )
                 )
                 current_text = decision.modified_text
@@ -110,6 +149,12 @@ def _run_rule_pass(
                         rule_id=rule.id,
                         reason=decision.reason,
                         skip_type=decision.skip_type,
+                        match_text=decision.match_text,
+                        selected_target=decision.selected_target,
+                        context_excerpt=decision.context_excerpt,
+                        block_type=element.block_type,
+                        section_path=element.section_path,
+                        candidate_id=_candidate_id(document_name, element.location, rule.id, current_text),
                     )
                 )
 
@@ -141,7 +186,11 @@ def _run_llm_pass(
         for rule in rules:
             if not rule.enabled or not rule.llm.enabled or not rule.has_candidate(current_text):
                 continue
-            preflight = rule.apply(current_text)
+            preflight = rule.apply(
+                current_text,
+                section_path=element.section_path,
+                in_excluded_section=element.in_excluded_section,
+            )
             if preflight.changed or preflight.skipped or preflight.already_expanded:
                 continue
             if rule.target_phrase.lower() in current_text.lower():
@@ -175,6 +224,9 @@ def _run_llm_pass(
                         rule_category=rule.category,
                         source="llm",
                         reason=result.reason,
+                        block_type=element.block_type,
+                        section_path=element.section_path,
+                        candidate_id=_candidate_id(document_name, element.location, rule.id, current_text),
                     )
                 )
                 summary.llm_changed += 1
@@ -193,6 +245,9 @@ def _run_llm_pass(
                         reason=result.reason,
                         skip_type="llm_gate_or_validation",
                         source="llm",
+                        block_type=element.block_type,
+                        section_path=element.section_path,
+                        candidate_id=_candidate_id(document_name, element.location, rule.id, current_text),
                     )
                 )
 
@@ -267,6 +322,157 @@ def run_document(
     return working_path, all_changes, all_skips, summaries
 
 
+def _configured_targets(config: dict) -> list[str]:
+    targets: list[str] = []
+    for rule in config.get("rules", []):
+        replacement = rule.get("replacement", {})
+        target = replacement.get("target_phrase")
+        if target and target not in targets:
+            targets.append(str(target))
+        for conditional in replacement.get("conditional_targets", []):
+            conditional_target = conditional.get("target_phrase")
+            if conditional_target and conditional_target not in targets:
+                targets.append(str(conditional_target))
+    return targets
+
+
+def _is_title_like_change(change: ChangeRecord) -> bool:
+    normalized = normalize_text(change.original_text)
+    if len(normalized) > 160 or ACTION_VERB_RE.search(change.original_text):
+        return False
+    return bool(
+        re.search(
+            r"\b(?:operador(?:a|es|as)?|supervisor(?:a|es|as)?|jefe\s+de\s+[aá]rea|due[ñn]o\s+de\s+[aá]rea)\b",
+            change.original_text,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _qa_flags_for_change(change: ChangeRecord, targets: list[str]) -> list[str]:
+    flags: list[str] = []
+    section = normalize_text(_section_text(change.section_path))
+    match = re.search(r"expanded\s+(\d+)\s+match", change.reason)
+    repairs_descriptor_order = "repaired" in change.reason and "descriptor order" in change.reason
+    expected_new_targets = int(match.group(1)) if match else 0 if repairs_descriptor_order else 1
+
+    if change.source == "llm":
+        flags.append("llm_used")
+    if re.search(r"\bregistros?\b", section):
+        flags.append("changed_in_registros")
+    if change.rule_id.startswith("operador") and re.search(
+        r"\b(?:CAS|CIO)\b|sala\s+de\s+control", change.match_text, re.IGNORECASE
+    ):
+        flags.append("operator_cas_context")
+    if _is_title_like_change(change):
+        flags.append("title_like_expansion")
+    if not repairs_descriptor_order and _target_already_present_near_match(change, targets):
+        flags.append("target_already_present_near_match")
+    for target in targets:
+        if target and change.modified_text.count(target) > change.original_text.count(target) + expected_new_targets:
+            flags.append("duplicate_target")
+            break
+    return list(dict.fromkeys(flags))
+
+
+def _target_already_present_near_match(change: ChangeRecord, targets: list[str]) -> bool:
+    original_norm = normalize_text(change.original_text)
+    selected_targets = [target.strip() for target in change.selected_target.split(" | ") if target.strip()]
+    targets_to_check = selected_targets or targets
+    for match_text in change.match_text.split(" | "):
+        match_norm = normalize_text(match_text)
+        if not match_norm:
+            continue
+        index = original_norm.find(match_norm)
+        if index == -1:
+            continue
+        after = original_norm[index + len(match_norm) : index + len(match_norm) + 180]
+        after_same_sentence = re.split(r"[\r\n.;:]", after, maxsplit=1)[0]
+        for target in targets_to_check:
+            target_norm = normalize_text(target)
+            if target_norm and (target_norm in match_norm or target_norm in after_same_sentence):
+                return True
+    return False
+
+
+def _repair_flagged_changes(
+    *,
+    output_by_document: dict[str, Path],
+    changes: list[ChangeRecord],
+) -> dict[str, bool]:
+    repaired: dict[str, bool] = {}
+    changes_by_document: dict[str, list[tuple[int, ChangeRecord]]] = {}
+    for index, change in enumerate(changes):
+        if not REPAIRABLE_QA_FLAGS.intersection(change.qa_flags):
+            continue
+        changes_by_document.setdefault(change.document_name, []).append((index, change))
+
+    for document_name, document_changes in changes_by_document.items():
+        output_path = output_by_document.get(document_name)
+        if not output_path or not output_path.exists():
+            continue
+        doc = load_docx(output_path)
+        elements = {element.location: element for element in collect_elements(doc)}
+        doc_changed = False
+        doc_repaired_changes: list[ChangeRecord] = []
+        for _, change in sorted(document_changes, key=lambda item: (item[1].pass_index, item[0]), reverse=True):
+            element = elements.get(change.location)
+            if element is None or element.text != change.modified_text:
+                repaired[change.candidate_id] = False
+                continue
+            apply_surgical_change(element, change.original_text)
+            change.qa_flags.append("auto_reverted")
+            repaired[change.candidate_id] = True
+            doc_repaired_changes.append(change)
+            doc_changed = True
+        if doc_changed:
+            try:
+                save_docx(doc, output_path)
+            except OSError:
+                for change in doc_repaired_changes:
+                    change.qa_flags = [flag for flag in change.qa_flags if flag != "auto_reverted"]
+                    change.qa_flags.append("auto_repair_failed")
+                    repaired[change.candidate_id] = False
+    return repaired
+
+
+def _run_post_audit(
+    *,
+    output_by_document: dict[str, Path],
+    changes: list[ChangeRecord],
+    skips: list[SkipRecord],
+    config: dict,
+    auto_repair: bool,
+) -> list[dict]:
+    targets = _configured_targets(config)
+    for change in changes:
+        change.qa_flags = _qa_flags_for_change(change, targets)
+
+    repaired = _repair_flagged_changes(output_by_document=output_by_document, changes=changes) if auto_repair else {}
+    rows: list[dict] = []
+    for index, change in enumerate(changes, start=1):
+        rows.append(
+            {
+                "index": index,
+                "document_name": change.document_name,
+                "location": change.location,
+                "rule_id": change.rule_id,
+                "source": change.source,
+                "qa_flags": ", ".join(change.qa_flags),
+                "auto_repaired": repaired.get(change.candidate_id, False),
+                "section_path": _section_text(change.section_path),
+                "match_text": change.match_text,
+                "selected_target": change.selected_target,
+                "original_text": change.original_text,
+                "modified_text": change.modified_text,
+            }
+        )
+    for skip in skips:
+        if "skip_section" in skip.skip_type or "skip_review_only" in skip.skip_type:
+            skip.qa_flags = ["expected_skip"]
+    return rows
+
+
 def main() -> int:
     args = parse_args()
     config_path = Path(args.config).resolve()
@@ -286,6 +492,8 @@ def main() -> int:
 
     changes_path = resolve_path(project_root, paths_cfg.get("changes_report", "reports/changes.jsonl"))
     registry_path = resolve_path(project_root, paths_cfg.get("registry_report", "reports/registro_cambios.xlsx"))
+    audit_json_path = resolve_path(project_root, paths_cfg.get("audit_report_json", "reports/auditoria_post_run.json"))
+    audit_excel_path = resolve_path(project_root, paths_cfg.get("audit_report_excel", "reports/auditoria_post_run.xlsx"))
 
     docx_inputs = _find_inputs(input_path)
     if not docx_inputs:
@@ -294,6 +502,7 @@ def main() -> int:
 
     all_changes: list[ChangeRecord] = []
     all_skips: list[SkipRecord] = []
+    output_by_document: dict[str, Path] = {}
     for docx_path in docx_inputs:
         print(f"[document] {docx_path.name}", file=sys.stderr)
         working_path, changes, skips, _summaries = run_document(
@@ -308,11 +517,27 @@ def main() -> int:
         )
         all_changes.extend(changes)
         all_skips.extend(skips)
+        output_by_document[docx_path.name] = working_path
         print(f"[document] output={working_path}", file=sys.stderr)
 
     if not args.dry_run:
+        if (args.force or bool(pipeline_cfg.get("overwrite_output", False))) and bool(
+            pipeline_cfg.get("reset_reports_on_force", True)
+        ):
+            changes_path.unlink(missing_ok=True)
+        post_audit_cfg = pipeline_cfg.get("post_audit", {})
+        audit_rows: list[dict] = []
+        if bool(post_audit_cfg.get("enabled", True)):
+            audit_rows = _run_post_audit(
+                output_by_document=output_by_document,
+                changes=all_changes,
+                skips=all_skips,
+                config=config,
+                auto_repair=bool(post_audit_cfg.get("auto_repair", True)),
+            )
+            write_audit_report(audit_rows, audit_excel_path, audit_json_path)
         append_changes_jsonl(all_changes, changes_path)
-        write_registry([], all_skips, registry_path, existing_jsonl=changes_path)
+        write_registry([], all_skips, registry_path, existing_jsonl=changes_path, audit_rows=audit_rows)
 
     print(
         f"Completed: {len(all_changes)} change(s), {len(all_skips)} skipped/review item(s).",

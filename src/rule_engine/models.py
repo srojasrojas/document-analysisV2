@@ -12,6 +12,12 @@ class DocxElement:
     location: str
     paragraph_obj: Any
     is_heading: bool = False
+    block_type: str = "body"
+    section_path: tuple[str, ...] = field(default_factory=tuple)
+    in_excluded_section: bool = False
+    table_index: int | None = None
+    row_index: int | None = None
+    cell_index: int | None = None
 
 
 @dataclass
@@ -25,6 +31,14 @@ class ChangeRecord:
     rule_category: str
     source: str
     reason: str
+    match_text: str = ""
+    selected_target: str = ""
+    selector_reason: str = ""
+    context_excerpt: str = ""
+    block_type: str = ""
+    section_path: tuple[str, ...] = field(default_factory=tuple)
+    candidate_id: str = ""
+    qa_flags: list[str] = field(default_factory=list)
     changed_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
 
     def to_dict(self) -> dict[str, Any]:
@@ -41,6 +55,13 @@ class SkipRecord:
     reason: str
     skip_type: str = "guard"
     source: str = "rule"
+    match_text: str = ""
+    selected_target: str = ""
+    context_excerpt: str = ""
+    block_type: str = ""
+    section_path: tuple[str, ...] = field(default_factory=tuple)
+    candidate_id: str = ""
+    qa_flags: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
