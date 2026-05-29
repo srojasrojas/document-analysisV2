@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import sys
 import argparse
 import re
+import sys
 from pathlib import Path
 
 from docx import Document
@@ -12,11 +12,21 @@ from rule_engine.docx_io import collect_elements, normalize_text
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-ORDER_DESCRIPTORS_RE = re.compile(
-    r"(?:de\s+(?:el|la|los|las)\s+|de\s+|del\s+)?"
-    r"(?:retro\s*-?\s*excavadoras?|mini\s*-?\s*cargador(?:a|es)?|"
-    r"cargador(?:a|es)?(?:\s+frontal)?|camion(?:es)?\s+tolva|"
-    r"rotopalas?|equipos?)\b",
+OPERATOR_ROLE_RE = re.compile(
+    r"\boperador(?:\s*/\s*a|\s*\([aA]\)|a|es|as)?(?:\s+a\s+cargo)?"
+    r"(?:\s+(?!o\b)[A-Za-zÁÉÍÓÚÑáéíóúñ&/().-]+){0,8}",
+    re.IGNORECASE,
+)
+SPLIT_COMPOUND_DESCRIPTOR_RE = re.compile(
+    r"\boperador(?:\s*/\s*a|\s*\([aA]\)|a|es|as)?"
+    r"(?:\s+(?:de|del)\s+(?:(?:el|la|los|las)\s+)?)?cami[oó]n(?:es)?\s+o\s+"
+    r"(?P<target>personal\s+(?:certificado\s+designado|designado)\s+por\s+minera\s+Spence|personal\s+calificado)"
+    r"\s+(?:tolva|pluma)\b",
+    re.IGNORECASE,
+)
+SUPERVISOR_LEGACY_RE = re.compile(
+    r"\b(?:supervisor(?:a|es|as)?|jefe\s+de\s+[aá]rea|due[ñn]o\s+de\s+[aá]rea)"
+    r"(?:\s+(?!o\b)[A-Za-zÁÉÍÓÚÑáéíóúñ&/().-]+){0,8}\s+o\s+experto\s+t[eé]cnico\b",
     re.IGNORECASE,
 )
 
@@ -30,8 +40,11 @@ def iter_text(path: Path):
         yield element.text
 
 
-def _target_phrases(config_path: Path) -> list[str]:
-    config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+def _load_config(config_path: Path) -> dict:
+    return yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+
+
+def _target_phrases(config: dict) -> list[str]:
     targets: list[str] = []
     for rule in config.get("rules", []):
         if not rule.get("enabled", True):
@@ -46,6 +59,33 @@ def _target_phrases(config_path: Path) -> list[str]:
     return targets
 
 
+def _operator_rule(config: dict) -> dict:
+    for rule in config.get("rules", []):
+        if rule.get("id") == "operador_to_spence":
+            return rule
+    return {}
+
+
+def _operator_descriptor_patterns(config: dict) -> list[re.Pattern[str]]:
+    rule = _operator_rule(config)
+    patterns = rule.get("guards", {}).get("descriptor_order_repair_patterns", [])
+    return [re.compile(str(pattern), re.IGNORECASE) for pattern in patterns]
+
+
+def _certified_operator_patterns(config: dict) -> tuple[str, list[re.Pattern[str]]]:
+    rule = _operator_rule(config)
+    for target in rule.get("replacement", {}).get("conditional_targets", []):
+        target_phrase = str(target.get("target_phrase", ""))
+        if "certificado designado" not in normalize_text(target_phrase):
+            continue
+        patterns = [
+            re.compile(str(pattern), re.IGNORECASE)
+            for pattern in target.get("match_patterns", [])
+        ]
+        return target_phrase, patterns
+    return "", []
+
+
 def _has_suspicious_duplicate(text: str, target: str) -> bool:
     target_re = re.escape(target)
     adjacent_pattern = re.compile(
@@ -57,22 +97,47 @@ def _has_suspicious_duplicate(text: str, target: str) -> bool:
     return bool(re.search(r"\bo\s+o\s+", text, re.IGNORECASE))
 
 
-def _has_operator_descriptor_order_issue(text: str, targets: list[str]) -> bool:
-    normalized = normalize_text(text)
+def _has_operator_descriptor_order_issue(
+    text: str, targets: list[str], descriptor_patterns: list[re.Pattern[str]]
+) -> bool:
     for target in targets:
-        target_norm = normalize_text(target)
-        if "personal" not in target_norm:
+        if "personal" not in normalize_text(target):
             continue
-        pattern = re.compile(
-            r"\boperador(?:a|es|as)?\s+o\s+"
-            + re.escape(target_norm)
-            + r"\s+"
-            + ORDER_DESCRIPTORS_RE.pattern,
-            re.IGNORECASE,
-        )
-        if pattern.search(normalized):
+        if SPLIT_COMPOUND_DESCRIPTOR_RE.search(text):
+            return True
+        for descriptor_pattern in descriptor_patterns:
+            pattern = re.compile(
+                r"\boperador(?:\s*/\s*a|\s*\([aA]\)|a|es|as)?\s+o\s+"
+                + re.escape(target)
+                + r"\s+(?:"
+                + descriptor_pattern.pattern
+                + r")",
+                re.IGNORECASE,
+            )
+            if pattern.search(text):
+                return True
+    return False
+
+
+def _has_operator_certification_target_issue(
+    text: str, certified_target: str, certified_patterns: list[re.Pattern[str]]
+) -> bool:
+    if not certified_target or not certified_patterns:
+        return False
+    default_target = "personal designado por minera Spence"
+    expanded_pattern = re.compile(
+        rf"(?P<role>{OPERATOR_ROLE_RE.pattern})\s+o\s+{re.escape(default_target)}",
+        re.IGNORECASE,
+    )
+    for match in expanded_pattern.finditer(text):
+        role_text = match.group("role")
+        if any(pattern.search(role_text) for pattern in certified_patterns):
             return True
     return False
+
+
+def _has_supervisor_legacy_issue(text: str) -> bool:
+    return bool(SUPERVISOR_LEGACY_RE.search(text))
 
 
 def parse_args() -> argparse.Namespace:
@@ -88,14 +153,25 @@ def main() -> int:
     if not path.exists():
         print(f"File not found: {path}", file=sys.stderr)
         return 1
-    targets = _target_phrases(args.config)
+    config = _load_config(args.config)
+    targets = _target_phrases(config)
     if not targets:
         print(f"No enabled rule targets found in {args.config}", file=sys.stderr)
         return 1
+    descriptor_patterns = _operator_descriptor_patterns(config)
+    certified_target, certified_patterns = _certified_operator_patterns(config)
 
     texts = list(iter_text(path))
     failed = False
-    order_issues = [text for text in texts if _has_operator_descriptor_order_issue(text, targets)]
+    order_issues = [
+        text for text in texts if _has_operator_descriptor_order_issue(text, targets, descriptor_patterns)
+    ]
+    certification_issues = [
+        text
+        for text in texts
+        if _has_operator_certification_target_issue(text, certified_target, certified_patterns)
+    ]
+    supervisor_legacy_issues = [text for text in texts if _has_supervisor_legacy_issue(text)]
     for target in targets:
         target_count = sum(text.count(target) for text in texts)
         duplicated = [text for text in texts if text.count(target) > 1]
@@ -112,6 +188,16 @@ def main() -> int:
     if order_issues:
         failed = True
         for text in order_issues[:5]:
+            print(text)
+    print(f"operator_certification_target_issues={len(certification_issues)}")
+    if certification_issues:
+        failed = True
+        for text in certification_issues[:5]:
+            print(text)
+    print(f"supervisor_legacy_target_issues={len(supervisor_legacy_issues)}")
+    if supervisor_legacy_issues:
+        failed = True
+        for text in supervisor_legacy_issues[:5]:
             print(text)
     return 1 if failed else 0
 

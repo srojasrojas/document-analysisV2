@@ -107,7 +107,16 @@ def main() -> int:
             "Equipo retroexcavadora",
             "Operador retroexcavadora",
             "El Operador retroexcavadora debe coordinar el retiro de material con el camion tolva.",
-            "Descriptor antes del target.",
+            "Debe usar personal certificado designado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Equipo excavadora",
+            "Operador de excavadora",
+            "El Operador de excavadora debe acercarse al punto de maniobra lentamente.",
+            "Debe usar personal certificado designado.",
         ],
     )
     _add_row(
@@ -116,7 +125,16 @@ def main() -> int:
             "Equipo camion tolva",
             "Operador de camion tolva",
             "El Operador de camion tolva debe revisar el layout para cargar y descargar el mineral.",
-            "Descriptor compuesto preservado.",
+            "Debe usar personal certificado designado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Equipo camion pluma",
+            "Operador del camion pluma",
+            "El Operador del camion pluma debe posicionarse fuera del radio de trabajo.",
+            "Debe usar personal certificado designado.",
         ],
     )
     _add_row(
@@ -125,7 +143,7 @@ def main() -> int:
             "Equipo mini cargador",
             "Operador mini cargador",
             "El Operador mini cargador debe retirar material por los costados con la correa detenida.",
-            "Descriptor compuesto preservado.",
+            "Debe usar personal certificado designado.",
         ],
     )
     _add_row(
@@ -134,7 +152,16 @@ def main() -> int:
             "Equipo rotopalas",
             "operadores de Rotopalas",
             "Los operadores de Rotopalas deben delimitar el area con conos y cadenas.",
-            "Plural preservado.",
+            "Debe usar personal certificado designado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Equipo puente grua",
+            "Operador del puente grua",
+            "El Operador del puente grua debe trasladar la carga hasta la zona segura.",
+            "Debe usar personal certificado designado.",
         ],
     )
     _add_row(
@@ -194,6 +221,15 @@ def main() -> int:
     _add_row(
         table,
         [
+            "Supervisor legado experto tecnico",
+            "supervisor del area o experto tecnico",
+            "El supervisor del area o experto tecnico debe autorizar la continuidad operacional.",
+            "Debe quedar con Ejecutivos del Área.",
+        ],
+    )
+    _add_row(
+        table,
+        [
             "Supervisor exento",
             "Supervisor Sala de Control",
             "El Supervisor Sala de Control monitorea las variables desde CAS.",
@@ -216,6 +252,15 @@ def main() -> int:
             "operador o personal designado por minera Spence",
             "El operador o personal designado por minera Spence confirma la disponibilidad del equipo.",
             "Sin duplicados.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Operador equipo con target antiguo",
+            "Operador de excavadora o personal designado por minera Spence",
+            "El Operador de excavadora o personal designado por minera Spence debe trasladar el equipo hacia la zona definida.",
+            "Debe actualizarse a personal certificado designado.",
         ],
     )
     _add_row(

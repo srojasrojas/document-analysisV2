@@ -42,25 +42,32 @@ rules:
   - id: operador_to_spence
     enabled: true
     category: role_expansion
-    description: Expand operator responsibility to Spence-designated personnel.
+    description: Expand operator responsibility to Spence-designated personnel, certified Spence-designated personnel, or qualified personnel by context.
     detection:
-      regex: "(?i)(?<![A-Za-z0-9_])operador(?:\\s*/\\s*a|\\s*\\([aA]\\)|a|es|as)?(?:\\s+a\\s+cargo)?(?:\\s+(?:(?:de|del)\\s+(?:(?:el|la|los|las)\\s+)?)?(?:planta(?:\\s+concentradora)?|equipos?|terreno|sala(?:\\s+de\\s+control)?|control|zona\\s+aut[oó]noma|puente\\s+gr[uú]a|gr[uú]a(?:\\s+horquilla)?|patio(?:\\s+de\\s+embarque)?|esparcidor|mini\\s*-?\\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\\s+frontal)?|retro\\s*-?\\s*excavadora(?:s)?|excavadora(?:s)?|cami[oó]n(?:\\s+tolva)?|camiones\\s+tolva|camioneta|mina|[aá]rea|proceso|procesos|chancado|molienda|flotaci[oó]n|relaves|maquinaria|operaciones|correas?|apilador(?:a)?|rotopalas?|picarocas|nave\\s+ew|c[aá]todos|sx|tf|cas))?(?:\\s+(?:autorizad[oa]s?|calificad[oa]s?|capacitad[oa]s?|certificad[oa]s?|competente(?:s)?|habilitad[oa]s?|acreditad[oa]s?|entrenad[oa]s?))?(?![A-Za-z0-9_])"
+      regex: "(?i)(?<![A-Za-z0-9_])operador(?:\\s*/\\s*a|\\s*\\([aA]\\)|a|es|as)?(?:\\s+a\\s+cargo)?(?:\\s+(?:(?:de|del)\\s+(?:(?:el|la|los|las)\\s+)?)?(?:planta(?:\\s+concentradora)?|equipos?|terreno|sala(?:\\s+de\\s+control)?|control|zona\\s+aut[oó]noma|puente\\s+gr[uú]a|gr[uú]a(?:\\s+horquilla)?|patio(?:\\s+de\\s+embarque)?|esparcidor|mini\\s*-?\\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\\s+frontal)?|retro\\s*-?\\s*excavadora(?:s)?|excavador(?:a|es)?|cami[oó]n(?:es)?(?:\\s+(?:tolva|pluma))?|camioneta|mina|[aá]rea|proceso|procesos|chancado|molienda|flotaci[oó]n|relaves|maquinaria|operaciones|correas?|apilador(?:a)?|rotopalas?|picarocas?|nave\\s+ew|c[aá]todos|sx|tf|cas))?(?:\\s+(?:autorizad[oa]s?|calificad[oa]s?|capacitad[oa]s?|certificad[oa]s?|competente(?:s)?|habilitad[oa]s?|acreditad[oa]s?|entrenad[oa]s?))?(?![A-Za-z0-9_])"
     replacement:
       mode: expansion
       target_phrase: personal designado por minera Spence
       connector: o
       format: "{matched} {connector} {target}"
+      upgradeable_target_phrases:
+        - personal designado por minera Spence
       conditional_targets:
         - target_phrase: personal calificado
           reason: qualification_or_technical_operator_context
           context_window_chars: 180
           patterns:
-            - "(?i)\\b(?:autorizad[oa]s?|calificad[oa]s?|capacitad[oa]s?|certificad[oa]s?|competente(?:s)?|habilitad[oa]s?|acreditad[oa]s?|entrenad[oa]s?)\\b"
+            - "(?i)\\b(?:autorizad[oa]s?|calificad[oa]s?|capacitad[oa]s?|competente(?:s)?|habilitad[oa]s?|acreditad[oa]s?|entrenad[oa]s?)\\b"
             - "(?i)\\b(?:bloqueo|bloquear|desbloqueo|desbloquear|loto|energizaci[oó]n|energizar|desenergizaci[oó]n|desenergizar|hmi|panel\\s+de\\s+control|reset|el[eé]ctric[oa]s?|instrumentaci[oó]n|mantenci[oó]n|calibraci[oó]n|calibrar|homologaci[oó]n|diagn[oó]stico)\\b"
+        - target_phrase: personal certificado designado por minera Spence
+          reason: equipment_certification_required
+          context_window_chars: 180
+          match_patterns:
+            - "(?i)\\b(?:retro\\s*-?\\s*excavadora(?:s)?|mini\\s*-?\\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\\s+frontal)?|excavador(?:a|es)?|cami[oó]n(?:es)?\\s+(?:tolva|pluma)|rotopalas?|apilador(?:a)?|esparcidor|picarocas?|puente\\s+gr[uú]a|gr[uú]a\\s+horquilla|maquinaria|equipos?|certificad[oa]s?)\\b"
     guards:
       skip_if_target_exists_in_paragraph: false
       skip_if_alternative_exists: true
-      alternative_pattern: "(?i)^\\s*(?:o|/|y/o)\\s+(?!(?:personal\\s+designado\\s+por\\s+minera\\s+Spence|personal\\s+calificado))"
+      alternative_pattern: "(?i)^\\s*(?:o|/|y/o)\\s+(?!(?:personal\\s+designado\\s+por\\s+minera\\s+Spence|personal\\s+certificado\\s+designado\\s+por\\s+minera\\s+Spence|personal\\s+calificado))"
       required_context_patterns:
         - "(?i)\\b(?:debe(?:n|r[aá]n?|r[aá])?|realiza(?:r|n)?|revisa(?:r|n)?|verifica(?:r|n)?|detiene(?:r|n)?|opera(?:r|n)?|inspecciona(?:r|n)?|coordina(?:r|n)?|informa(?:r|n)?|avisa(?:r|n)?|solicita(?:r|n)?|autoriza(?:r|n)?|registra(?:r|n)?|bloquea(?:r|n)?|desbloquea(?:r|n)?|energiza(?:r|n)?|desenergiza(?:r|n)?|comunica(?:r|n)?)\\b"
         - "(?i)\\b(?:dar|da|dando)\\s+aviso\\s+a\\b"
@@ -73,7 +80,7 @@ rules:
         - "(?i)\\bCIO\\b"
       exempt_window_chars: 60
       descriptor_order_repair_patterns:
-        - "(?:de\\s+(?:el|la|los|las)\\s+|de\\s+|del\\s+)?(?:retro\\s*-?\\s*excavadora(?:s)?|mini\\s*-?\\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\\s+frontal)?|cami[oó]n(?:es)?\\s+tolva|rotopalas?|equipos?|terreno|apilador(?:a)?|correas?|picarocas|gr[uú]a(?:\\s+horquilla)?|puente\\s+gr[uú]a)\\b"
+        - "(?:de\\s+(?:el|la|los|las)\\s+|de\\s+|del\\s+)?(?:retro\\s*-?\\s*excavadora(?:s)?|mini\\s*-?\\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\\s+frontal)?|excavador(?:a|es)?|cami[oó]n(?:es)?\\s+(?:tolva|pluma)|rotopalas?|equipos?|terreno|apilador(?:a)?|esparcidor|correas?|picarocas?|gr[uú]a(?:\\s+horquilla)?|puente\\s+gr[uú]a)\\b"
       excluded_section_patterns:
         - "(?i)\\bregistros?\\b"
       review_only_patterns:
@@ -94,12 +101,14 @@ rules:
     category: role_expansion
     description: Expand supervisor responsibility to include Area Executives.
     detection:
-      regex: "(?i)(?<![A-Za-z0-9_])(?:supervisor(?:a|es|as)?\\s+(?:de|del)\\s+(?:turno|[aá]rea(?:\\s+de\\s+(?:(?!\\b(?:debe|deber[aá]|para|si|cuando|y|o|u|ejecutivos?)\\b)[A-Za-zÁÉÍÓÚÑáéíóúñ&/.-]+)(?:\\s+(?:(?!\\b(?:debe|deber[aá]|para|si|cuando|y|o|u|ejecutivos?)\\b)[A-Za-zÁÉÍÓÚÑáéíóúñ&/.-]+)){0,5})?|[aá]rea\\s+seca|operaciones?(?:\\s+SPENCE)?|mantenci[oó]n|producci[oó]n|planta|terreno|zona(?:\\s+aut[oó]noma)?|sala(?:\\s+de\\s+control)?)|supervisor\\s*\\([ae]\\)|jefe\\s+de\\s+[aá]rea|due[ñn]o\\s+de\\s+[aá]rea|supervisor(?:a|es|as)?(?:\\s+(?!(?:de|del|el|la|los|las|un|una|debe|deber[aá]|para|si|cuando|y|o|u|que|quien|conozca(?:n)?|conocer|ejecutivos?)\\b)[A-Za-zÁÉÍÓÚÑáéíóúñ&/.-]+){0,4})(?![A-Za-z0-9_])"
+      regex: "(?i)(?<![A-Za-z0-9_])(?:supervisor(?:a|es|as)?\\s+(?:de|del)\\s+(?:turno|[aá]rea(?:\\s+de\\s+(?:(?!\\b(?:debe|deber[aá]|para|si|cuando|y|o|u|ejecutivos?)\\b)[A-Za-zÁÉÍÓÚÑáéíóúñ&/.-]+)(?:\\s+(?:(?!\\b(?:debe|deber[aá]|para|si|cuando|y|o|u|ejecutivos?)\\b)[A-Za-zÁÉÍÓÚÑáéíóúñ&/.-]+)){0,5})?|[aá]rea\\s+seca|operaciones?(?:\\s+SPENCE)?|mantenci[oó]n|mantenimiento|producci[oó]n|planta|terreno|zona(?:\\s+aut[oó]noma)?|sala(?:\\s+de\\s+control)?|fcab)|supervisor\\s*\\([ae]\\)|jefe\\s+de\\s+[aá]rea|due[ñn]o\\s+de\\s+[aá]rea|supervisor(?:a|es|as)?(?:\\s+(?!(?:de|del|el|la|los|las|un|una|debe|deber[aá]|para|si|cuando|y|o|u|que|quien|conozca(?:n)?|conocer|ejecutivos?)\\b)[A-Za-zÁÉÍÓÚÑáéíóúñ&/.-]+){0,4})(?![A-Za-z0-9_])"
     replacement:
       mode: expansion
       target_phrase: Ejecutivos del Área
       connector: o
       format: "{matched} {connector} {target}"
+      legacy_target_patterns:
+        - "experto\\s+t[eé]cnico"
     guards:
       skip_if_target_exists_in_paragraph: true
       skip_if_alternative_exists: true

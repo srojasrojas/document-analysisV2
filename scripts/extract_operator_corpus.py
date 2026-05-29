@@ -21,9 +21,10 @@ OPERATOR_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_])operador(?:\s*/\s*a|\s*\([aA]\)|a|es|as)?"
     r"(?:\s+a\s+cargo)?(?:\s+(?:(?:de|del)\s+)?"
     r"(?:planta(?:\s+concentradora)?|equipo|terreno|sala(?:\s+de\s+control)?|control|"
-    r"zona\s+aut[oó]noma|puente\s+gr[uú]a|cam[ií]on|camioneta|mina|[aá]rea|"
+    r"zona\s+aut[oó]noma|puente\s+gr[uú]a|gr[uú]a(?:\s+horquilla)?|cami[oó]n(?:es)?(?:\s+(?:tolva|pluma))?|camioneta|mina|[aá]rea|"
     r"proceso|procesos|chancado|molienda|flotaci[oó]n|relaves|maquinaria|operaciones|"
-    r"correas?|apilador(?:a)?|rotopala|picarocas|nave\s+ew|c[aá]todos|sx|tf|cas))?"
+    r"correas?|apilador(?:a)?|esparcidor|retro\s*-?\s*excavadora(?:s)?|excavador(?:a|es)?|"
+    r"mini\s*-?\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\s+frontal)?|rotopalas?|picarocas?|nave\s+ew|c[aá]todos|sx|tf|cas))?"
     r"(?:\s+(?:autorizad[oa]s?|calificad[oa]s?|capacitad[oa]s?|certificad[oa]s?|"
     r"competente(?:s)?|habilitad[oa]s?|acreditad[oa]s?|entrenad[oa]s?))?"
     r"(?![A-Za-z0-9_])"
@@ -35,8 +36,14 @@ ACTION_RE = re.compile(
     r"desbloquea(?:r|n)?|energiza(?:r|n)?|desenergiza(?:r|n)?|comunica(?:r|n)?|dar\s+aviso\s+a)\b"
 )
 QUALIFIED_RE = re.compile(
-    r"(?i)\b(?:autorizad[oa]s?|calificad[oa]s?|capacitad[oa]s?|certificad[oa]s?|"
+    r"(?i)\b(?:autorizad[oa]s?|calificad[oa]s?|capacitad[oa]s?|"
     r"competente(?:s)?|habilitad[oa]s?|acreditad[oa]s?|entrenad[oa]s?)\b"
+)
+CERTIFIED_EQUIPMENT_RE = re.compile(
+    r"(?i)\b(?:retro\s*-?\s*excavadora(?:s)?|mini\s*-?\s*cargador(?:a|es)?|"
+    r"cargador(?:a|es)?(?:\s+frontal)?|excavador(?:a|es)?|cami[oó]n(?:es)?\s+(?:tolva|pluma)|"
+    r"rotopalas?|apilador(?:a)?|esparcidor|picarocas?|puente\s+gr[uú]a|"
+    r"gr[uú]a\s+horquilla|maquinaria|equipos?|certificad[oa]s?)\b"
 )
 TECHNICAL_RE = re.compile(
     r"(?i)\b(?:bloqueo|bloquear|desbloqueo|desbloquear|loto|energizaci[oó]n|energizar|"
@@ -45,10 +52,12 @@ TECHNICAL_RE = re.compile(
 )
 CAS_RE = re.compile(r"(?i)\b(?:CAS|CIO)\b|sala\s+de\s+control")
 TARGET_RE = re.compile(
-    r"(?i)\b(?:personal\s+designado\s+por\s+minera\s+Spence|personal\s+calificado)\b"
+    r"(?i)\b(?:personal\s+designado\s+por\s+minera\s+Spence|"
+    r"personal\s+certificado\s+designado\s+por\s+minera\s+Spence|personal\s+calificado)\b"
 )
 ALT_AFTER_RE = re.compile(
-    r"(?i)^\s*(?:o|/|y/o)\s+(?!(?:personal\s+designado\s+por\s+minera\s+Spence|personal\s+calificado))"
+    r"(?i)^\s*(?:o|/|y/o)\s+(?!(?:personal\s+designado\s+por\s+minera\s+Spence|"
+    r"personal\s+certificado\s+designado\s+por\s+minera\s+Spence|personal\s+calificado))"
 )
 
 
@@ -82,6 +91,12 @@ def _classify(text: str, section_path: tuple[str, ...], match: re.Match[str]) ->
         return "review_no_action_context", "", "No responsibility/action verb near match"
     if QUALIFIED_RE.search(context) or TECHNICAL_RE.search(context):
         return "expand_personal_calificado", "personal calificado", "Qualified or technical operator context"
+    if CERTIFIED_EQUIPMENT_RE.search(match.group(0)):
+        return (
+            "expand_personal_certificado_designado",
+            "personal certificado designado por minera Spence",
+            "Certified equipment operator context",
+        )
     return "expand_spence", "personal designado por minera Spence", "Operational operator responsibility"
 
 
@@ -195,6 +210,12 @@ def write_workbook(path: Path, candidates: list[dict[str, Any]], jsonl_refs: lis
         workbook,
         "Personal Calificado",
         [row for row in candidates if row["classification"] == "expand_personal_calificado"],
+        ["document_name", "location", "match_text", "target", "reason", "context_excerpt", "text"],
+    )
+    _write_sheet(
+        workbook,
+        "Personal Certificado",
+        [row for row in candidates if row["classification"] == "expand_personal_certificado_designado"],
         ["document_name", "location", "match_text", "target", "reason", "context_excerpt", "text"],
     )
     _write_sheet(

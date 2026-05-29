@@ -95,12 +95,21 @@ Cada entrada de `rules` contiene:
 - `guards`: excepciones, alternativas ya existentes y textos solo para revision.
 - `llm_refining`: prompts especificos y validaciones opcionales por regla.
 
-La regla de operador usa dos destinos:
+La regla de operador usa tres destinos, en este orden de prioridad:
 
-- Por defecto agrega `o personal designado por minera Spence`.
 - Usa `o personal calificado` cuando el contexto menciona personal autorizado,
-  capacitado, certificado, habilitado, bloqueo/LOTO, energizacion, HMI, panel de
-  control, reset, instrumentacion, mantencion, calibracion o diagnostico tecnico.
+    capacitado, habilitado, bloqueo/LOTO, energizacion, HMI, panel de control,
+    reset, instrumentacion, mantencion, calibracion o diagnostico tecnico.
+- Usa `o personal certificado designado por minera Spence` cuando el cargo de
+    operador incluye una especificacion de equipo certificado o pesado, como
+    retroexcavadora, excavadora, minicargador, cargador frontal, camion tolva,
+    camion pluma, rotopala, apilador, esparcidor, picaroca, puente grua, grua
+    horquilla u operador de equipos.
+- Por defecto agrega `o personal designado por minera Spence` para operador de
+    proceso, planta, area o responsabilidades operacionales generales.
+
+La regla de supervisor repara el legado `o experto tecnico` y lo homologa a
+`o Ejecutivos del Área`.
 
 Las menciones bajo secciones `REGISTRO` o `REGISTROS` se omiten y quedan en el
 registro como `skip_section`. Tambien se omiten contextos CAS/CIO/Sala de
@@ -123,7 +132,11 @@ repo vecino. Para usar OpenAI directo en otra rama, cambia `llm_refine.model` a
 
 - `data/input/mock_reglas.docx`: documento mock editable.
 - `data/output/mock_reglas_modificado.docx`: documento procesado.
-- `tmp/run_b25_no_llm_reviewed/*.docx`: documentos reales procesados en modo no-LLM.
+- `tmp/run_b25_no_llm_certified_supervisor_fixed/*.docx`: documentos reales
+    procesados en modo no-LLM con operadores certificados y supervisor legado
+    corregido.
+- `tmp/run_b25_no_llm_order_fixed/*.docx`: salida previa con correccion de orden
+    de descriptores.
 - `reports/operator_corpus.xlsx`: coleccion de candidatos extraida de `run_b25`.
 - `reports/changes.jsonl`: cambios aplicados, con ubicacion body/tabla.
 - `reports/registro_cambios.xlsx`: registro legible con cambios y omitidos.

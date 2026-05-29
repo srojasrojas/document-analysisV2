@@ -34,6 +34,7 @@ class ConditionalTarget:
     target_phrase: str
     reason: str
     patterns: tuple[str, ...]
+    match_patterns: tuple[str, ...]
     context_window_chars: int
 
 
@@ -44,6 +45,8 @@ class ReplacementConfig:
     connector: str
     format_template: str
     conditional_targets: tuple[ConditionalTarget, ...]
+    upgradeable_target_phrases: tuple[str, ...]
+    legacy_target_patterns: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -91,6 +94,7 @@ class ReplacementRule:
                 target_phrase=str(target_cfg["target_phrase"]),
                 reason=str(target_cfg.get("reason", target_cfg["target_phrase"])),
                 patterns=tuple(str(pattern) for pattern in target_cfg.get("patterns", [])),
+                match_patterns=tuple(str(pattern) for pattern in target_cfg.get("match_patterns", [])),
                 context_window_chars=int(target_cfg.get("context_window_chars", 160)),
             )
             for target_cfg in replacement_cfg.get("conditional_targets", [])
@@ -101,6 +105,12 @@ class ReplacementRule:
             connector=str(replacement_cfg.get("connector", "o")).strip(),
             format_template=str(replacement_cfg.get("format", "{matched} {connector} {target}")),
             conditional_targets=conditional_targets,
+            upgradeable_target_phrases=tuple(
+                str(target) for target in replacement_cfg.get("upgradeable_target_phrases", [])
+            ),
+            legacy_target_patterns=tuple(
+                str(pattern) for pattern in replacement_cfg.get("legacy_target_patterns", [])
+            ),
         )
         self.guards = GuardConfig(
             skip_if_target_exists_in_paragraph=bool(
@@ -159,13 +169,18 @@ class ReplacementRule:
             re.compile(pattern) for pattern in self.guards.excluded_section_patterns
         ]
         self.conditional_target_patterns = [
-            (target, [re.compile(pattern) for pattern in target.patterns])
+            (
+                target,
+                [re.compile(pattern) for pattern in target.patterns],
+                [re.compile(pattern) for pattern in target.match_patterns],
+            )
             for target in self.replacement.conditional_targets
         ]
         self.all_target_phrases = tuple(
             dict.fromkeys(
                 [self.replacement.target_phrase]
                 + [target.target_phrase for target in self.replacement.conditional_targets]
+                + list(self.replacement.upgradeable_target_phrases)
             )
         )
         target_pattern = "|".join(re.escape(target) for target in self.all_target_phrases)
@@ -192,6 +207,20 @@ class ReplacementRule:
             if descriptor_pattern
             else None
         )
+        target_repair_patterns = [
+            re.escape(target) for target in self.replacement.upgradeable_target_phrases
+        ] + list(self.replacement.legacy_target_patterns)
+        self._target_repair_after_match_patterns = [
+            re.compile(
+                r"^\s*(?:"
+                + re.escape(self.replacement.connector)
+                + r"|/|y/o)\s+(?:el\s+)?(?P<target>"
+                + pattern
+                + r")",
+                re.IGNORECASE,
+            )
+            for pattern in target_repair_patterns
+        ]
 
     @property
     def target_phrase(self) -> str:
@@ -242,12 +271,72 @@ class ReplacementRule:
         return any(normalize_text(target) in after_norm for target in self.all_target_phrases)
 
     def _select_target(self, full_text: str, match: re.Match[str]) -> tuple[str, str, str]:
-        for target, patterns in self.conditional_target_patterns:
+        for target, context_patterns, match_patterns in self.conditional_target_patterns:
+            match_text = match.group(0)
+            if any(pattern.search(match_text) for pattern in match_patterns):
+                context = self._context_excerpt(full_text, match, target.context_window_chars)
+                return target.target_phrase, target.reason, context
             context = self._context_excerpt(full_text, match, target.context_window_chars)
-            if any(pattern.search(context) for pattern in patterns):
+            if any(pattern.search(context) for pattern in context_patterns):
                 return target.target_phrase, target.reason, context
         context = self._context_excerpt(full_text, match, self.guards.required_context_window_chars)
         return self.replacement.target_phrase, "default_target", context
+
+    def _repair_targets_after_matches(
+        self, text: str
+    ) -> tuple[str, int, list[str], list[str], list[str], list[str]]:
+        if not self._target_repair_after_match_patterns:
+            return text, 0, [], [], [], []
+
+        repairs: list[tuple[int, int, str, str, str, str, str]] = []
+        for match in self.pattern.finditer(text):
+            selected_target, selector_reason, context_excerpt = self._select_target(text, match)
+            after = text[match.end() : match.end() + self.guards.target_after_match_window_chars]
+            for target_pattern in self._target_repair_after_match_patterns:
+                target_match = target_pattern.search(after)
+                if target_match is None:
+                    continue
+                current_target = target_match.group("target")
+                if normalize_text(current_target) == normalize_text(selected_target):
+                    break
+                start = match.end() + target_match.start("target")
+                end = match.end() + target_match.end("target")
+                repairs.append(
+                    (
+                        start,
+                        end,
+                        selected_target,
+                        f"{match.group(0)} {self.replacement.connector} {current_target}",
+                        selected_target,
+                        selector_reason,
+                        context_excerpt,
+                    )
+                )
+                break
+
+        if not repairs:
+            return text, 0, [], [], [], []
+
+        repaired = text
+        applied: list[tuple[int, int, str, str, str, str, str]] = []
+        last_start = len(text) + 1
+        for repair in sorted(repairs, key=lambda item: item[0], reverse=True):
+            start, end, selected_target, *_ = repair
+            if end > last_start:
+                continue
+            repaired = repaired[:start] + selected_target + repaired[end:]
+            applied.append(repair)
+            last_start = start
+
+        applied.reverse()
+        return (
+            repaired,
+            len(applied),
+            [item[3] for item in applied],
+            [item[4] for item in applied],
+            [item[5] for item in applied],
+            [item[6] for item in applied],
+        )
 
     def _repair_target_before_descriptor(self, text: str) -> tuple[str, int, list[str], list[str]]:
         if self._target_before_descriptor_pattern is None:
@@ -289,7 +378,43 @@ class ReplacementRule:
             return RuleDecision(self.id, False, text, text, "no candidate")
 
         matches = list(self.pattern.finditer(text))
+        original_text = text
+        repaired_text, repaired_count, repaired_match_texts, repaired_targets = (
+            self._repair_target_before_descriptor(text)
+        )
+        text = repaired_text
+        (
+            text,
+            target_repair_count,
+            target_repair_match_texts,
+            target_repair_targets,
+            target_repair_reasons,
+            target_repair_contexts,
+        ) = self._repair_targets_after_matches(text)
+
         if self._is_in_excluded_section(section_path, in_excluded_section):
+            if repaired_count or target_repair_count:
+                reason_parts: list[str] = []
+                if repaired_count:
+                    reason_parts.append(f"repaired {repaired_count} descriptor order issue(s)")
+                if target_repair_count:
+                    reason_parts.append(f"updated {target_repair_count} target phrase(s)")
+                unique_targets = list(dict.fromkeys(target_repair_targets))
+                for target in repaired_targets:
+                    if target not in unique_targets:
+                        unique_targets.append(target)
+                return RuleDecision(
+                    self.id,
+                    True,
+                    original_text,
+                    text,
+                    "; ".join(reason_parts),
+                    candidates=len(matches),
+                    match_text=" | ".join((repaired_match_texts + target_repair_match_texts)[:5]),
+                    selected_target=" | ".join(unique_targets),
+                    selector_reason=" | ".join(dict.fromkeys(target_repair_reasons)),
+                    context_excerpt=" | ".join(target_repair_contexts[:3]),
+                )
             return RuleDecision(
                 self.id,
                 False,
@@ -303,14 +428,8 @@ class ReplacementRule:
                 context_excerpt=" > ".join(section_path),
             )
 
-        original_text = text
-        repaired_text, repaired_count, repaired_match_texts, repaired_targets = (
-            self._repair_target_before_descriptor(text)
-        )
-        text = repaired_text
-
         text_norm = normalize_text(text)
-        if self.guards.skip_if_target_exists_in_paragraph and any(
+        if target_repair_count == 0 and self.guards.skip_if_target_exists_in_paragraph and any(
             normalize_text(target) in text_norm for target in self.all_target_phrases
         ):
             return RuleDecision(
@@ -321,6 +440,20 @@ class ReplacementRule:
                 "target phrase already present in paragraph",
                 candidates=len(matches),
                 already_expanded=1,
+            )
+        if target_repair_count and self.guards.skip_if_target_exists_in_paragraph:
+            return RuleDecision(
+                self.id,
+                True,
+                original_text,
+                text,
+                f"updated {target_repair_count} target phrase(s)",
+                candidates=len(list(self.pattern.finditer(text))),
+                already_expanded=1,
+                match_text=" | ".join(target_repair_match_texts[:5]),
+                selected_target=" | ".join(dict.fromkeys(target_repair_targets)),
+                selector_reason=" | ".join(dict.fromkeys(target_repair_reasons)),
+                context_excerpt=" | ".join(target_repair_contexts[:3]),
             )
 
         candidates = 0
@@ -384,7 +517,7 @@ class ReplacementRule:
             return self.build_replacement(match_text, selected_target)
 
         modified = self.pattern.sub(replace, text)
-        if changed == 0 and repaired_count == 0:
+        if changed == 0 and repaired_count == 0 and target_repair_count == 0:
             if already_expanded:
                 reason = "all candidates already expanded"
             elif skipped:
@@ -408,13 +541,15 @@ class ReplacementRule:
         reason_parts: list[str] = []
         if repaired_count:
             reason_parts.append(f"repaired {repaired_count} descriptor order issue(s)")
+        if target_repair_count:
+            reason_parts.append(f"updated {target_repair_count} target phrase(s)")
         if changed:
             reason_parts.append(f"expanded {changed} match(es)")
-        unique_targets = list(dict.fromkeys(changed_targets))
+        unique_targets = list(dict.fromkeys(target_repair_targets + changed_targets))
         for target in repaired_targets:
             if target not in unique_targets:
                 unique_targets.append(target)
-        unique_reasons = list(dict.fromkeys(selector_reasons))
+        unique_reasons = list(dict.fromkeys(target_repair_reasons + selector_reasons))
         return RuleDecision(
             self.id,
             True,
@@ -424,10 +559,12 @@ class ReplacementRule:
             candidates=candidates,
             already_expanded=already_expanded,
             skipped=skipped,
-            match_text=" | ".join((repaired_match_texts + changed_match_texts)[:5]),
+            match_text=" | ".join(
+                (repaired_match_texts + target_repair_match_texts + changed_match_texts)[:5]
+            ),
             selected_target=" | ".join(unique_targets),
             selector_reason=" | ".join(unique_reasons),
-            context_excerpt=" | ".join(changed_contexts[:3]),
+            context_excerpt=" | ".join((target_repair_contexts + changed_contexts)[:3]),
         )
 
 
