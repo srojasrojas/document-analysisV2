@@ -29,6 +29,17 @@ SUPERVISOR_LEGACY_RE = re.compile(
     r"(?:\s+(?!o\b)[A-Za-zÁÉÍÓÚÑáéíóúñ&/().-]+){0,8}\s+o\s+experto\s+t[eé]cnico\b",
     re.IGNORECASE,
 )
+OPERATOR_TABLE_RESIDUAL_RE = re.compile(
+    r"\boperador(?:\s*/\s*a|\s*\([aA]\)|a|es|as)?(?:\s+a\s+cargo)?"
+    r"(?:\s+(?!o\b)[A-Za-zÁÉÍÓÚÑáéíóúñ0-9&/().-]+){0,10}\s+o\s+"
+    r"(?P<target>personal\s+(?:certificado\s+designado|designado)\s+por\s+minera\s+Spence|personal\s+calificado)"
+    r"\s+(?P<residual>Spence\b|(?:de\s+)?(?:EW|MLDC|MDC|SX|TF)\b(?:\s+Spence)?|"
+    r"de\s+c[aá]todos\b|(?:de\s+)?otras\s+[aá]reas\b|(?:de\s+la\s+)?m[aá]quina\s+despegadora\b|"
+    r"(?:de\s+)?embarque\b|(?:de\s+(?:el|la|los|las)\s+|de\s+|del\s+)?puentes?\s+gr[uú]as?\b|"
+    r"encargad[oa]\b|designad[oa]s?\b)",
+    re.IGNORECASE,
+)
+SPENCE_DUPLICATE_RE = re.compile(r"\bSpence\s+Spence\b", re.IGNORECASE)
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -140,6 +151,10 @@ def _has_supervisor_legacy_issue(text: str) -> bool:
     return bool(SUPERVISOR_LEGACY_RE.search(text))
 
 
+def _has_operator_table_residual_issue(text: str) -> bool:
+    return bool(OPERATOR_TABLE_RESIDUAL_RE.search(text) or SPENCE_DUPLICATE_RE.search(text))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Verify duplicate configured target phrases in a DOCX.")
     parser.add_argument("docx", type=Path)
@@ -171,6 +186,7 @@ def main() -> int:
         for text in texts
         if _has_operator_certification_target_issue(text, certified_target, certified_patterns)
     ]
+    table_residual_issues = [text for text in texts if _has_operator_table_residual_issue(text)]
     supervisor_legacy_issues = [text for text in texts if _has_supervisor_legacy_issue(text)]
     for target in targets:
         target_count = sum(text.count(target) for text in texts)
@@ -193,6 +209,11 @@ def main() -> int:
     if certification_issues:
         failed = True
         for text in certification_issues[:5]:
+            print(text)
+    print(f"operator_table_residue_issues={len(table_residual_issues)}")
+    if table_residual_issues:
+        failed = True
+        for text in table_residual_issues[:5]:
             print(text)
     print(f"supervisor_legacy_target_issues={len(supervisor_legacy_issues)}")
     if supervisor_legacy_issues:

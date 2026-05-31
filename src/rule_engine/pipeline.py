@@ -353,21 +353,21 @@ def _qa_flags_for_change(change: ChangeRecord, targets: list[str]) -> list[str]:
     flags: list[str] = []
     section = normalize_text(_section_text(change.section_path))
     match = re.search(r"expanded\s+(\d+)\s+match", change.reason)
-    repairs_descriptor_order = "repaired" in change.reason and "descriptor order" in change.reason
+    repairs_descriptor = "repaired" in change.reason and "descriptor" in change.reason
     updates_existing_target = "updated" in change.reason and "target phrase" in change.reason
-    expected_new_targets = int(match.group(1)) if match else 0 if repairs_descriptor_order else 1
+    expected_new_targets = int(match.group(1)) if match else 0 if repairs_descriptor else 1
 
     if change.source == "llm":
         flags.append("llm_used")
-    if re.search(r"\bregistros?\b", section) and not (repairs_descriptor_order or updates_existing_target):
+    if re.search(r"\bregistros?\b", section) and not (repairs_descriptor or updates_existing_target):
         flags.append("changed_in_registros")
     if change.rule_id.startswith("operador") and re.search(
         r"\b(?:CAS|CIO)\b|sala\s+de\s+control", change.match_text, re.IGNORECASE
     ):
         flags.append("operator_cas_context")
-    if not updates_existing_target and _is_title_like_change(change):
+    if not (repairs_descriptor or updates_existing_target) and _is_title_like_change(change):
         flags.append("title_like_expansion")
-    if not repairs_descriptor_order and _target_already_present_near_match(change, targets):
+    if not repairs_descriptor and _target_already_present_near_match(change, targets):
         flags.append("target_already_present_near_match")
     for target in targets:
         if target and change.modified_text.count(target) > change.original_text.count(target) + expected_new_targets:

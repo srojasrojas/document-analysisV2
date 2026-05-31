@@ -212,6 +212,114 @@ def main() -> int:
     _add_row(
         table,
         [
+            "Tabla operador Spence",
+            "Operador Spence",
+            "El Operador Spence debe retirar el equipo desde el area asignada.",
+            "Sin duplicar Spence.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Tabla operador certificado",
+            "Operador Spence debidamente certificado",
+            "El Operador Spence debidamente certificado en operacion de puente grua debe ejecutar la maniobra.",
+            "Debe usar personal certificado designado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Tabla patio catodos",
+            "operador de patio de catodos",
+            "El operador de patio de catodos debe verificar el orden de las placas antes del traslado.",
+            "Descriptor completo antes del target.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Tabla patio embarque",
+            "Operador de Patio embarque",
+            "El Operador de Patio embarque debe registrar el despacho en el sistema.",
+            "Descriptor embarque preservado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Tabla otras areas",
+            "operadores de otras areas",
+            "Los operadores de otras areas deben coordinar la entrega con operaciones.",
+            "Descriptor otras areas preservado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Tabla EW",
+            "Operador EW",
+            "El Operador EW debe detener la alimentacion ante desviaciones del circuito.",
+            "Descriptor EW preservado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Tabla de EW",
+            "Operador de EW",
+            "El Operador de EW debe comunicar la condicion al supervisor de turno.",
+            "Descriptor de EW preservado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Tabla MLDC",
+            "Operador MLDC",
+            "El Operador MLDC debe revisar la secuencia de arranque.",
+            "Descriptor MLDC preservado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Tabla maquina despegadora",
+            "Operador de la maquina despegadora",
+            "El Operador de la maquina despegadora debe detener el equipo ante una alarma.",
+            "Descriptor maquina despegadora preservado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Tabla puente grua encargado",
+            "operador encargado del puente grua",
+            "El operador encargado del puente grua debe revisar el area de izaje antes de operar.",
+            "Descriptor encargado preservado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Tabla malformado Spence",
+            "operador o personal designado por minera Spence Spence",
+            "El operador o personal designado por minera Spence Spence debe revisar la lista operacional.",
+            "Debe reparar Spence duplicado.",
+        ],
+    )
+    _add_row(
+        table,
+        [
+            "Tabla malformado catodos",
+            "operador de patio o personal designado por minera Spence de catodos",
+            "El operador de patio o personal designado por minera Spence de catodos debe liberar el sector.",
+            "Debe mover de catodos antes del target.",
+        ],
+    )
+    _add_row(
+        table,
+        [
             "Caso supervisor ya expandido",
             "supervisor o Ejecutivos del Área",
             "El supervisor o Ejecutivos del Área autoriza la continuidad de la tarea.",

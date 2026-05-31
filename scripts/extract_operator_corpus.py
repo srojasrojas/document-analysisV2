@@ -20,13 +20,19 @@ DEFAULT_OUTPUT = PROJECT_ROOT / "reports" / "operator_corpus.xlsx"
 OPERATOR_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_])operador(?:\s*/\s*a|\s*\([aA]\)|a|es|as)?"
     r"(?:\s+a\s+cargo)?(?:\s+(?:(?:de|del)\s+)?"
-    r"(?:planta(?:\s+concentradora)?|equipo|terreno|sala(?:\s+de\s+control)?|control|"
-    r"zona\s+aut[oó]noma|puente\s+gr[uú]a|gr[uú]a(?:\s+horquilla)?|cami[oó]n(?:es)?(?:\s+(?:tolva|pluma))?|camioneta|mina|[aá]rea|"
+    r"(?:planta(?:\s+concentradora)?|equipos?|terreno|sala(?:\s+de\s+control)?|control|"
+    r"zona\s+aut[oó]noma|puentes?\s+gr[uú]as?|gr[uú]a(?:\s+horquilla)?|"
+    r"patio(?:\s+(?:de\s+)?(?:embarque|c[aá]todos))?(?:\s+Spence)?|"
+    r"cami[oó]n(?:es)?(?:\s+(?:tolva|pluma))?|camioneta|mina|[aá]rea|"
     r"proceso|procesos|chancado|molienda|flotaci[oó]n|relaves|maquinaria|operaciones|"
     r"correas?|apilador(?:a)?|esparcidor|retro\s*-?\s*excavadora(?:s)?|excavador(?:a|es)?|"
-    r"mini\s*-?\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\s+frontal)?|rotopalas?|picarocas?|nave\s+ew|c[aá]todos|sx|tf|cas))?"
+    r"mini\s*-?\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\s+frontal)?|rotopalas?|picarocas?|"
+    r"nave\s+ew|c[aá]todos|sx|tf|cas|Spence(?:\s+debidamente\s+certificad[oa]s?(?:\s+en\s+operaci[oó]n\s+de\s+puentes?\s+gr[uú]as?)?)?|"
+    r"(?:MLDC|MDC|EW)(?:\s+Spence)?|m[aá]quina\s+despegadora(?:\s+de\s+c[aá]todos)?|"
+    r"otras\s+[aá]reas|circuitos?(?:\s+de\s+EW)?|"
+    r"encargad[oa]\s+(?:de\s+los\s+circuitos\s+de\s+EW|del\s+puente\s+gr[uú]a)))?"
     r"(?:\s+(?:autorizad[oa]s?|calificad[oa]s?|capacitad[oa]s?|certificad[oa]s?|"
-    r"competente(?:s)?|habilitad[oa]s?|acreditad[oa]s?|entrenad[oa]s?))?"
+    r"competente(?:s)?|habilitad[oa]s?|acreditad[oa]s?|entrenad[oa]s?|designad[oa]s?))?"
     r"(?![A-Za-z0-9_])"
 )
 ACTION_RE = re.compile(
@@ -42,7 +48,7 @@ QUALIFIED_RE = re.compile(
 CERTIFIED_EQUIPMENT_RE = re.compile(
     r"(?i)\b(?:retro\s*-?\s*excavadora(?:s)?|mini\s*-?\s*cargador(?:a|es)?|"
     r"cargador(?:a|es)?(?:\s+frontal)?|excavador(?:a|es)?|cami[oó]n(?:es)?\s+(?:tolva|pluma)|"
-    r"rotopalas?|apilador(?:a)?|esparcidor|picarocas?|puente\s+gr[uú]a|"
+    r"rotopalas?|apilador(?:a)?|esparcidor|picarocas?|puentes?\s+gr[uú]as?|"
     r"gr[uú]a\s+horquilla|maquinaria|equipos?|certificad[oa]s?)\b"
 )
 TECHNICAL_RE = re.compile(

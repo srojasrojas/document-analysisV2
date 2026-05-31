@@ -108,6 +108,11 @@ La regla de operador usa tres destinos, en este orden de prioridad:
 - Por defecto agrega `o personal designado por minera Spence` para operador de
     proceso, planta, area o responsabilidades operacionales generales.
 
+La deteccion de operador tambien cubre descriptores compuestos frecuentes en
+tablas, como `Operador Spence`, `Operador EW`, `Operador MLDC`, `Operador de
+Patio embarque`, `operador de patio de catodos`, `operadores de otras areas` y
+`Operador de la maquina despegadora`, para evitar residuos despues del target.
+
 La regla de supervisor repara el legado `o experto tecnico` y lo homologa a
 `o Ejecutivos del Área`.
 
@@ -135,6 +140,8 @@ repo vecino. Para usar OpenAI directo en otra rama, cambia `llm_refine.model` a
 - `tmp/run_b25_no_llm_certified_supervisor_fixed/*.docx`: documentos reales
     procesados en modo no-LLM con operadores certificados y supervisor legado
     corregido.
+- `tmp/run_b25_no_llm_table_operator_fixed/*.docx`: salida no-LLM con
+    descriptores compuestos de operador en tablas corregidos.
 - `tmp/run_b25_no_llm_order_fixed/*.docx`: salida previa con correccion de orden
     de descriptores.
 - `reports/operator_corpus.xlsx`: coleccion de candidatos extraida de `run_b25`.

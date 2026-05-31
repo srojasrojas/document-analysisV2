@@ -44,7 +44,7 @@ rules:
     category: role_expansion
     description: Expand operator responsibility to Spence-designated personnel, certified Spence-designated personnel, or qualified personnel by context.
     detection:
-      regex: "(?i)(?<![A-Za-z0-9_])operador(?:\\s*/\\s*a|\\s*\\([aA]\\)|a|es|as)?(?:\\s+a\\s+cargo)?(?:\\s+(?:(?:de|del)\\s+(?:(?:el|la|los|las)\\s+)?)?(?:planta(?:\\s+concentradora)?|equipos?|terreno|sala(?:\\s+de\\s+control)?|control|zona\\s+aut[oó]noma|puente\\s+gr[uú]a|gr[uú]a(?:\\s+horquilla)?|patio(?:\\s+de\\s+embarque)?|esparcidor|mini\\s*-?\\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\\s+frontal)?|retro\\s*-?\\s*excavadora(?:s)?|excavador(?:a|es)?|cami[oó]n(?:es)?(?:\\s+(?:tolva|pluma))?|camioneta|mina|[aá]rea|proceso|procesos|chancado|molienda|flotaci[oó]n|relaves|maquinaria|operaciones|correas?|apilador(?:a)?|rotopalas?|picarocas?|nave\\s+ew|c[aá]todos|sx|tf|cas))?(?:\\s+(?:autorizad[oa]s?|calificad[oa]s?|capacitad[oa]s?|certificad[oa]s?|competente(?:s)?|habilitad[oa]s?|acreditad[oa]s?|entrenad[oa]s?))?(?![A-Za-z0-9_])"
+      regex: "(?i)(?<![A-Za-z0-9_])operador(?:\\s*/\\s*a|\\s*\\([aA]\\)|a|es|as)?(?:\\s+a\\s+cargo)?(?:\\s+(?:(?:de|del)\\s+(?:(?:el|la|los|las)\\s+)?)?(?:planta(?:\\s+concentradora)?|equipos?|terreno|sala(?:\\s+de\\s+control)?|control|zona\\s+aut[oó]noma|puentes?\\s+gr[uú]as?|gr[uú]a(?:\\s+horquilla)?|patio(?:\\s+(?:de\\s+)?(?:embarque|c[aá]todos))?(?:\\s+Spence)?|esparcidor|mini\\s*-?\\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\\s+frontal)?|retro\\s*-?\\s*excavadora(?:s)?|excavador(?:a|es)?|cami[oó]n(?:es)?(?:\\s+(?:tolva|pluma))?|camioneta|mina|[aá]rea|proceso|procesos|chancado|molienda|flotaci[oó]n|relaves|maquinaria|operaciones|correas?|apilador(?:a)?|rotopalas?|picarocas?|nave\\s+ew|c[aá]todos|sx|tf|cas|Spence(?:\\s+debidamente\\s+certificad[oa]s?(?:\\s+en\\s+operaci[oó]n\\s+de\\s+puentes?\\s+gr[uú]as?)?)?|(?:MLDC|MDC|EW)(?:\\s+Spence)?|m[aá]quina\\s+despegadora(?:\\s+de\\s+c[aá]todos)?|otras\\s+[aá]reas|circuitos?(?:\\s+de\\s+EW)?|encargad[oa]\\s+(?:de\\s+los\\s+circuitos\\s+de\\s+EW|del\\s+puente\\s+gr[uú]a)))?(?:\\s+(?:autorizad[oa]s?|calificad[oa]s?|capacitad[oa]s?|certificad[oa]s?|competente(?:s)?|habilitad[oa]s?|acreditad[oa]s?|entrenad[oa]s?|designad[oa]s?))?(?![A-Za-z0-9_])"
     replacement:
       mode: expansion
       target_phrase: personal designado por minera Spence
@@ -63,7 +63,7 @@ rules:
           reason: equipment_certification_required
           context_window_chars: 180
           match_patterns:
-            - "(?i)\\b(?:retro\\s*-?\\s*excavadora(?:s)?|mini\\s*-?\\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\\s+frontal)?|excavador(?:a|es)?|cami[oó]n(?:es)?\\s+(?:tolva|pluma)|rotopalas?|apilador(?:a)?|esparcidor|picarocas?|puente\\s+gr[uú]a|gr[uú]a\\s+horquilla|maquinaria|equipos?|certificad[oa]s?)\\b"
+            - "(?i)\\b(?:retro\\s*-?\\s*excavadora(?:s)?|mini\\s*-?\\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\\s+frontal)?|excavador(?:a|es)?|cami[oó]n(?:es)?\\s+(?:tolva|pluma)|rotopalas?|apilador(?:a)?|esparcidor|picarocas?|puentes?\\s+gr[uú]as?|gr[uú]a\\s+horquilla|maquinaria|equipos?|certificad[oa]s?)\\b"
     guards:
       skip_if_target_exists_in_paragraph: false
       skip_if_alternative_exists: true
@@ -80,7 +80,7 @@ rules:
         - "(?i)\\bCIO\\b"
       exempt_window_chars: 60
       descriptor_order_repair_patterns:
-        - "(?:de\\s+(?:el|la|los|las)\\s+|de\\s+|del\\s+)?(?:retro\\s*-?\\s*excavadora(?:s)?|mini\\s*-?\\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\\s+frontal)?|excavador(?:a|es)?|cami[oó]n(?:es)?\\s+(?:tolva|pluma)|rotopalas?|equipos?|terreno|apilador(?:a)?|esparcidor|correas?|picarocas?|gr[uú]a(?:\\s+horquilla)?|puente\\s+gr[uú]a)\\b"
+        - "(?:de\\s+(?:el|la|los|las)\\s+|de\\s+|del\\s+)?(?:retro\\s*-?\\s*excavadora(?:s)?|mini\\s*-?\\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\\s+frontal)?|excavador(?:a|es)?|cami[oó]n(?:es)?\\s+(?:tolva|pluma)|rotopalas?|equipos?|terreno|apilador(?:a)?|esparcidor|correas?|picarocas?|gr[uú]a(?:\\s+horquilla)?|puentes?\\s+gr[uú]as?|Spence(?:\\s+debidamente\\s+certificad[oa]s?(?:\\s+en\\s+operaci[oó]n\\s+de\\s+puentes?\\s+gr[uú]as?)?)?|(?:MLDC|MDC|EW|SX|TF)(?:\\s+Spence)?|m[aá]quina\\s+despegadora(?:\\s+de\\s+c[aá]todos)?|patio(?:\\s+(?:de\\s+)?(?:embarque|c[aá]todos))?(?:\\s+Spence)?|c[aá]todos|otras\\s+[aá]reas|embarque|circuitos?(?:\\s+de\\s+EW)?|encargad[oa](?:\\s+(?:de\\s+los\\s+circuitos\\s+de\\s+EW|del\\s+puente\\s+gr[uú]a))?|designad[oa]s?)\\b"
       excluded_section_patterns:
         - "(?i)\\bregistros?\\b"
       review_only_patterns:

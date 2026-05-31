@@ -192,9 +192,23 @@ class ReplacementRule:
         descriptor_pattern = "|".join(
             f"(?:{pattern})" for pattern in self.guards.descriptor_order_repair_patterns
         )
+        operator_descriptor_stopwords = (
+            r"(?:o|u|y|a|para|que|cuando|si|debe(?:n|r[aá]n?|r[aá])?|realiza(?:r|n)?|"
+            r"revisa(?:r|n)?|verifica(?:r|n)?|detiene(?:r|n)?|opera(?:r|n)?|"
+            r"inspecciona(?:r|n)?|coordina(?:r|n)?|informa(?:r|n)?|avisa(?:r|n)?|"
+            r"solicita(?:r|n)?|autoriza(?:r|n)?|registra(?:r|n)?|bloquea(?:r|n)?|"
+            r"desbloquea(?:r|n)?|energiza(?:r|n)?|desenergiza(?:r|n)?|comunica(?:r|n)?|"
+            r"operador(?:a|es|as)?|supervisor(?:a|es|as)?|CAS|CIO)\b"
+        )
+        operator_pattern = (
+            r"\boperador(?:\s*/\s*a|\s*\([aA]\)|a|es|as)?(?:\s+a\s+cargo)?"
+            r"(?:\s+(?!"
+            + operator_descriptor_stopwords
+            + r")[A-Za-zÁÉÍÓÚÑáéíóúñ0-9&/().-]+){0,10}?"
+        )
         self._target_before_descriptor_pattern = (
             re.compile(
-                r"(?P<operator>\boperador(?:\s*/\s*a|\s*\([aA]\)|a|es|as)?)"
+                r"(?P<operator>" + operator_pattern + r")"
                 r"\s+"
                 + re.escape(self.replacement.connector)
                 + r"\s+(?P<target>"
@@ -242,8 +256,13 @@ class ReplacementRule:
         return any(pattern.search(phrase) for pattern in self.exempt_context_patterns)
 
     def _context_excerpt(self, full_text: str, match: re.Match[str], window_chars: int) -> str:
-        start = max(0, match.start() - window_chars)
-        end = min(len(full_text), match.end() + window_chars)
+        return self._context_excerpt_for_span(full_text, match.start(), match.end(), window_chars)
+
+    def _context_excerpt_for_span(
+        self, full_text: str, start_index: int, end_index: int, window_chars: int
+    ) -> str:
+        start = max(0, start_index - window_chars)
+        end = min(len(full_text), end_index + window_chars)
         return re.sub(r"\s+", " ", full_text[start:end]).strip()
 
     def _is_in_excluded_section(self, section_path: tuple[str, ...], in_excluded_section: bool) -> bool:
@@ -271,15 +290,25 @@ class ReplacementRule:
         return any(normalize_text(target) in after_norm for target in self.all_target_phrases)
 
     def _select_target(self, full_text: str, match: re.Match[str]) -> tuple[str, str, str]:
+        return self._select_target_for_text(full_text, match.group(0), match.start(), match.end())
+
+    def _select_target_for_text(
+        self, full_text: str, match_text: str, start_index: int, end_index: int
+    ) -> tuple[str, str, str]:
         for target, context_patterns, match_patterns in self.conditional_target_patterns:
-            match_text = match.group(0)
             if any(pattern.search(match_text) for pattern in match_patterns):
-                context = self._context_excerpt(full_text, match, target.context_window_chars)
+                context = self._context_excerpt_for_span(
+                    full_text, start_index, end_index, target.context_window_chars
+                )
                 return target.target_phrase, target.reason, context
-            context = self._context_excerpt(full_text, match, target.context_window_chars)
+            context = self._context_excerpt_for_span(
+                full_text, start_index, end_index, target.context_window_chars
+            )
             if any(pattern.search(context) for pattern in context_patterns):
                 return target.target_phrase, target.reason, context
-        context = self._context_excerpt(full_text, match, self.guards.required_context_window_chars)
+        context = self._context_excerpt_for_span(
+            full_text, start_index, end_index, self.guards.required_context_window_chars
+        )
         return self.replacement.target_phrase, "default_target", context
 
     def _repair_targets_after_matches(
@@ -338,22 +367,39 @@ class ReplacementRule:
             [item[6] for item in applied],
         )
 
-    def _repair_target_before_descriptor(self, text: str) -> tuple[str, int, list[str], list[str]]:
+    def _repair_target_before_descriptor(
+        self, text: str
+    ) -> tuple[str, int, list[str], list[str], list[str], list[str]]:
         if self._target_before_descriptor_pattern is None:
-            return text, 0, [], []
+            return text, 0, [], [], [], []
         repaired_matches: list[str] = []
         repaired_targets: list[str] = []
+        repaired_reasons: list[str] = []
+        repaired_contexts: list[str] = []
 
         def repair(match: re.Match[str]) -> str:
+            role_text = f"{match.group('operator')} {match.group('descriptor')}"
+            selected_target, selector_reason, context_excerpt = self._select_target_for_text(
+                text, role_text, match.start(), match.end()
+            )
             repaired_matches.append(match.group(0))
-            repaired_targets.append(match.group("target"))
+            repaired_targets.append(selected_target)
+            repaired_reasons.append(selector_reason)
+            repaired_contexts.append(context_excerpt)
             return (
                 f"{match.group('operator')} {match.group('descriptor')} "
-                f"{self.replacement.connector} {match.group('target')}"
+                f"{self.replacement.connector} {selected_target}"
             )
 
         repaired = self._target_before_descriptor_pattern.sub(repair, text)
-        return repaired, len(repaired_matches), repaired_matches, repaired_targets
+        return (
+            repaired,
+            len(repaired_matches),
+            repaired_matches,
+            repaired_targets,
+            repaired_reasons,
+            repaired_contexts,
+        )
 
     def build_replacement(self, match_text: str, target_phrase: str | None = None) -> str:
         if self.replacement.mode != "expansion":
@@ -379,7 +425,14 @@ class ReplacementRule:
 
         matches = list(self.pattern.finditer(text))
         original_text = text
-        repaired_text, repaired_count, repaired_match_texts, repaired_targets = (
+        (
+            repaired_text,
+            repaired_count,
+            repaired_match_texts,
+            repaired_targets,
+            repaired_reasons,
+            repaired_contexts,
+        ) = (
             self._repair_target_before_descriptor(text)
         )
         text = repaired_text
@@ -412,8 +465,8 @@ class ReplacementRule:
                     candidates=len(matches),
                     match_text=" | ".join((repaired_match_texts + target_repair_match_texts)[:5]),
                     selected_target=" | ".join(unique_targets),
-                    selector_reason=" | ".join(dict.fromkeys(target_repair_reasons)),
-                    context_excerpt=" | ".join(target_repair_contexts[:3]),
+                    selector_reason=" | ".join(dict.fromkeys(repaired_reasons + target_repair_reasons)),
+                    context_excerpt=" | ".join((repaired_contexts + target_repair_contexts)[:3]),
                 )
             return RuleDecision(
                 self.id,
@@ -517,7 +570,15 @@ class ReplacementRule:
             return self.build_replacement(match_text, selected_target)
 
         modified = self.pattern.sub(replace, text)
-        if changed == 0 and repaired_count == 0 and target_repair_count == 0:
+        (
+            modified,
+            post_repaired_count,
+            post_repaired_match_texts,
+            post_repaired_targets,
+            post_repaired_reasons,
+            post_repaired_contexts,
+        ) = self._repair_target_before_descriptor(modified)
+        if changed == 0 and repaired_count == 0 and target_repair_count == 0 and post_repaired_count == 0:
             if already_expanded:
                 reason = "all candidates already expanded"
             elif skipped:
@@ -543,13 +604,17 @@ class ReplacementRule:
             reason_parts.append(f"repaired {repaired_count} descriptor order issue(s)")
         if target_repair_count:
             reason_parts.append(f"updated {target_repair_count} target phrase(s)")
+        if post_repaired_count:
+            reason_parts.append(f"repaired {post_repaired_count} post-expansion descriptor issue(s)")
         if changed:
             reason_parts.append(f"expanded {changed} match(es)")
-        unique_targets = list(dict.fromkeys(target_repair_targets + changed_targets))
+        unique_targets = list(dict.fromkeys(target_repair_targets + post_repaired_targets + changed_targets))
         for target in repaired_targets:
             if target not in unique_targets:
                 unique_targets.append(target)
-        unique_reasons = list(dict.fromkeys(target_repair_reasons + selector_reasons))
+        unique_reasons = list(
+            dict.fromkeys(target_repair_reasons + repaired_reasons + post_repaired_reasons + selector_reasons)
+        )
         return RuleDecision(
             self.id,
             True,
@@ -560,11 +625,18 @@ class ReplacementRule:
             already_expanded=already_expanded,
             skipped=skipped,
             match_text=" | ".join(
-                (repaired_match_texts + target_repair_match_texts + changed_match_texts)[:5]
+                (
+                    repaired_match_texts
+                    + target_repair_match_texts
+                    + post_repaired_match_texts
+                    + changed_match_texts
+                )[:5]
             ),
             selected_target=" | ".join(unique_targets),
             selector_reason=" | ".join(unique_reasons),
-            context_excerpt=" | ".join((target_repair_contexts + changed_contexts)[:3]),
+            context_excerpt=" | ".join(
+                (repaired_contexts + target_repair_contexts + post_repaired_contexts + changed_contexts)[:3]
+            ),
         )
 
 
