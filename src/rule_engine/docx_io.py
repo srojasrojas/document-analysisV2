@@ -7,6 +7,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.document import Document as DocxDocument
+from docx.enum.text import WD_COLOR_INDEX
 from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 
@@ -207,10 +208,12 @@ def collect_elements(doc: DocxDocument) -> list[DocxElement]:
 def _fallback_replace(paragraph: Paragraph, new_text: str) -> None:
     if paragraph.runs:
         paragraph.runs[0].text = new_text
+        paragraph.runs[0].font.highlight_color = WD_COLOR_INDEX.TURQUOISE
         for run in paragraph.runs[1:]:
             run.text = ""
+            run.font.highlight_color = WD_COLOR_INDEX.TURQUOISE
     else:
-        paragraph.add_run(new_text)
+        paragraph.add_run(new_text).font.highlight_color = WD_COLOR_INDEX.TURQUOISE
 
 
 def apply_surgical_change(element: DocxElement, new_text: str) -> None:
@@ -276,8 +279,10 @@ def apply_surgical_change(element: DocxElement, new_text: str) -> None:
     suffix = last_run.text[len(last_run.text) - suffix_length :] if suffix_length else ""
 
     first_run.text = prefix + replacement + suffix
+    first_run.font.highlight_color = WD_COLOR_INDEX.TURQUOISE
     for index in affected[1:]:
         paragraph.runs[index].text = ""
+        paragraph.runs[index].font.highlight_color = WD_COLOR_INDEX.TURQUOISE
 
     element.text = new_text
     element.normalized = normalize_text(new_text)
