@@ -6,6 +6,8 @@ paths:
   registry_report: reports/registro_cambios.xlsx
   audit_report_json: reports/auditoria_post_run.json
   audit_report_excel: reports/auditoria_post_run.xlsx
+  embedded_header_footer_report_jsonl: reports/embedded_header_footer_cleanup.jsonl
+  embedded_header_footer_report_excel: reports/embedded_header_footer_cleanup.xlsx
   reference_excel: tmp/referencia.xlsx
   reference_summary: reports/referencia_resumen.md
 
@@ -28,6 +30,18 @@ pipeline:
   skip_heading_styles: true
   dry_run_keeps_output: false
   reset_reports_on_force: true
+  embedded_header_footer_cleanup:
+    enabled: true
+    action: remove
+    apply_before_rules: true
+    min_confidence_remove: 0.82
+    min_confidence_review: 0.45
+    max_removable_chars: 160
+    remove_table_artifacts: false
+    protect_front_matter_tables: true
+    front_matter_table_count: 1
+    patterns: []
+    table_patterns: []
   post_audit:
     enabled: true
     auto_repair: true

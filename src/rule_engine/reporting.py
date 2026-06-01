@@ -6,7 +6,7 @@ from pathlib import Path
 
 import xlsxwriter
 
-from .models import ChangeRecord, SkipRecord
+from .models import ChangeRecord, EmbeddedArtifactRecord, SkipRecord
 
 
 def append_changes_jsonl(changes: list[ChangeRecord], path: Path) -> None:
@@ -33,6 +33,90 @@ def load_change_dicts(path: Path) -> list[dict]:
             except json.JSONDecodeError:
                 continue
     return records
+
+
+def write_embedded_artifact_report(
+    records: list[EmbeddedArtifactRecord],
+    excel_path: Path,
+    jsonl_path: Path | None = None,
+) -> None:
+    if jsonl_path is not None:
+        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        with jsonl_path.open("w", encoding="utf-8") as handle:
+            for record in records:
+                handle.write(json.dumps(record.to_dict(), ensure_ascii=False))
+                handle.write("\n")
+
+    excel_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = xlsxwriter.Workbook(str(excel_path))
+    summary_sheet = workbook.add_worksheet("Resumen")
+    candidates_sheet = workbook.add_worksheet("Candidatos")
+    header_format = workbook.add_format({"bold": True, "bg_color": "#D9EAF7"})
+    wrap_format = workbook.add_format({"text_wrap": True, "valign": "top"})
+    warning_format = workbook.add_format({"text_wrap": True, "valign": "top", "bg_color": "#FFF2CC"})
+
+    by_action = Counter(record.action for record in records)
+    by_document = Counter(record.document_name for record in records)
+    applied = sum(1 for record in records if record.applied)
+    summary_rows = [
+        ("total_candidates", len(records)),
+        ("applied", applied),
+        ("documents_with_candidates", len(by_document)),
+    ]
+    summary_sheet.write(0, 0, "Metric", header_format)
+    summary_sheet.write(0, 1, "Value", header_format)
+    for row_index, (metric, value) in enumerate(summary_rows, start=1):
+        summary_sheet.write(row_index, 0, metric)
+        summary_sheet.write(row_index, 1, value)
+    action_start = len(summary_rows) + 3
+    summary_sheet.write(action_start, 0, "Action", header_format)
+    summary_sheet.write(action_start, 1, "Count", header_format)
+    for row_index, (action, count) in enumerate(by_action.most_common(), start=action_start + 1):
+        summary_sheet.write(row_index, 0, action)
+        summary_sheet.write(row_index, 1, count)
+    document_start = action_start
+    summary_sheet.write(document_start, 3, "Document", header_format)
+    summary_sheet.write(document_start, 4, "Candidates", header_format)
+    for row_index, (document_name, count) in enumerate(by_document.most_common(), start=document_start + 1):
+        summary_sheet.write(row_index, 3, document_name)
+        summary_sheet.write(row_index, 4, count)
+    summary_sheet.set_column(0, 4, 32)
+
+    headers = [
+        "document_name",
+        "location",
+        "block_type",
+        "action",
+        "applied",
+        "confidence",
+        "reasons",
+        "occurrence_count",
+        "recurring_group_id",
+        "style_name",
+        "alignment",
+        "section_path",
+        "real_header_footer_match",
+        "context_before",
+        "text",
+        "context_after",
+        "candidate_id",
+        "detected_at",
+    ]
+    for column, header in enumerate(headers):
+        candidates_sheet.write(0, column, header, header_format)
+    sorted_records = sorted(records, key=lambda item: (item.document_name, item.location, -item.confidence))
+    for row_index, record in enumerate(sorted_records, start=1):
+        row = record.to_dict()
+        for column, header in enumerate(headers):
+            value = row.get(header, "")
+            if isinstance(value, (list, tuple)):
+                value = " > ".join(str(item) for item in value)
+            cell_format = warning_format if header == "action" and str(value).startswith(("review", "protected")) else wrap_format
+            candidates_sheet.write(row_index, column, value, cell_format)
+    candidates_sheet.set_column(0, 12, 24)
+    candidates_sheet.set_column(13, 15, 72)
+    candidates_sheet.set_column(16, 17, 24)
+    workbook.close()
 
 
 def write_registry(

@@ -68,6 +68,35 @@ class SkipRecord:
 
 
 @dataclass
+class EmbeddedArtifactRecord:
+    document_name: str
+    location: str
+    block_type: str
+    action: str
+    confidence: float
+    reasons: list[str]
+    text: str
+    normalized_text: str
+    style_name: str = ""
+    alignment: str = ""
+    section_path: tuple[str, ...] = field(default_factory=tuple)
+    table_index: int | None = None
+    row_index: int | None = None
+    cell_index: int | None = None
+    occurrence_count: int = 1
+    recurring_group_id: str = ""
+    real_header_footer_match: bool = False
+    context_before: str = ""
+    context_after: str = ""
+    applied: bool = False
+    candidate_id: str = ""
+    detected_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class PassSummary:
     pass_index: int
     candidates: int = 0

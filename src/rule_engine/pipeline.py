@@ -9,9 +9,10 @@ from pathlib import Path
 
 from .config import load_config, load_env_file, project_root_from_config, resolve_path
 from .docx_io import apply_surgical_change, collect_elements, load_docx, normalize_text, save_docx
+from .embedded_artifacts import excluded_locations, run_embedded_artifact_cleanup
 from .llm_refine import LlmRefiner
-from .models import ChangeRecord, PassSummary, SkipRecord
-from .reporting import append_changes_jsonl, write_audit_report, write_registry
+from .models import ChangeRecord, EmbeddedArtifactRecord, PassSummary, SkipRecord
+from .reporting import append_changes_jsonl, write_audit_report, write_embedded_artifact_report, write_registry
 from .rules import ReplacementRule, load_rules
 
 
@@ -41,6 +42,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true", help="Scan without writing documents or reports")
     parser.add_argument("--simple-only", action="store_true", help="Disable optional LLM refining")
     parser.add_argument("--force", action="store_true", help="Recreate output files from the input documents")
+    parser.add_argument(
+        "--skip-embedded-cleanup",
+        action="store_true",
+        help="Disable configured cleanup of body-embedded headers and footers",
+    )
     return parser.parse_args()
 
 
@@ -92,6 +98,7 @@ def _run_rule_pass(
     rules: list[ReplacementRule],
     skip_heading_styles: bool,
     dry_run: bool,
+    excluded_element_locations: set[str] | None = None,
 ) -> tuple[list[ChangeRecord], list[SkipRecord], PassSummary]:
     doc = load_docx(doc_path)
     elements = collect_elements(doc)
@@ -99,7 +106,10 @@ def _run_rule_pass(
     skips: list[SkipRecord] = []
     summary = PassSummary(pass_index=pass_index)
 
+    excluded_element_locations = excluded_element_locations or set()
     for element in elements:
+        if element.location in excluded_element_locations:
+            continue
         if skip_heading_styles and element.is_heading:
             continue
         current_text = element.text
@@ -171,6 +181,7 @@ def _run_llm_pass(
     llm_refiner: LlmRefiner,
     rules: list[ReplacementRule],
     dry_run: bool,
+    excluded_element_locations: set[str] | None = None,
 ) -> tuple[list[ChangeRecord], list[SkipRecord], PassSummary]:
     doc = load_docx(doc_path)
     elements = collect_elements(doc)
@@ -181,7 +192,10 @@ def _run_llm_pass(
     if not llm_refiner.can_run():
         return changes, skips, summary
 
+    excluded_element_locations = excluded_element_locations or set()
     for element in elements:
+        if element.location in excluded_element_locations:
+            continue
         current_text = element.text
         for rule in rules:
             if not rule.enabled or not rule.llm.enabled or not rule.has_candidate(current_text):
@@ -266,7 +280,7 @@ def run_document(
     dry_run: bool,
     simple_only: bool,
     force: bool,
-) -> tuple[Path, list[ChangeRecord], list[SkipRecord], list[PassSummary]]:
+) -> tuple[Path, list[ChangeRecord], list[SkipRecord], list[PassSummary], list[EmbeddedArtifactRecord]]:
     rules = load_rules(config)
     if not rules:
         raise ValueError("No replacement rules configured")
@@ -275,8 +289,30 @@ def run_document(
     all_changes: list[ChangeRecord] = []
     all_skips: list[SkipRecord] = []
     summaries: list[PassSummary] = []
+    cleanup_records: list[EmbeddedArtifactRecord] = []
 
     skip_heading_styles = bool(config.get("pipeline", {}).get("skip_heading_styles", True))
+    cleanup_cfg = config.get("pipeline", {}).get("embedded_header_footer_cleanup", {})
+    if bool(cleanup_cfg.get("enabled", False)) and bool(cleanup_cfg.get("apply_before_rules", True)):
+        cleanup_records = run_embedded_artifact_cleanup(
+            working_path,
+            document_name=input_path.name,
+            config=cleanup_cfg,
+            dry_run=dry_run,
+        )
+        applied_count = sum(1 for record in cleanup_records if record.applied)
+        actionable_count = sum(
+            1
+            for record in cleanup_records
+            if record.action in {"remove", "clear_text", "exclude", "would_remove", "would_clear_text"}
+        )
+        print(
+            f"[embedded-cleanup] {input_path.name}: candidates={len(cleanup_records)} "
+            f"actionable={actionable_count} applied={applied_count}",
+            file=sys.stderr,
+        )
+
+    cleanup_excluded_locations = excluded_locations(cleanup_records)
     use_llm = bool(config.get("pipeline", {}).get("use_llm_refine", False)) and not simple_only
     llm_refiner = None
     if use_llm:
@@ -290,6 +326,7 @@ def run_document(
             rules=rules,
             skip_heading_styles=skip_heading_styles,
             dry_run=dry_run,
+            excluded_element_locations=cleanup_excluded_locations,
         )
         all_changes.extend(changes)
         all_skips.extend(skips)
@@ -302,6 +339,7 @@ def run_document(
                 llm_refiner=llm_refiner,
                 rules=rules,
                 dry_run=dry_run,
+                excluded_element_locations=cleanup_excluded_locations,
             )
             all_changes.extend(llm_changes)
             all_skips.extend(llm_skips)
@@ -319,7 +357,7 @@ def run_document(
         if summary.changed == 0:
             break
 
-    return working_path, all_changes, all_skips, summaries
+    return working_path, all_changes, all_skips, summaries, cleanup_records
 
 
 def _configured_targets(config: dict) -> list[str]:
@@ -482,6 +520,8 @@ def main() -> int:
     config = load_config(config_path)
     paths_cfg = config.get("paths", {})
     pipeline_cfg = config.get("pipeline", {})
+    if args.skip_embedded_cleanup:
+        config.setdefault("pipeline", {}).setdefault("embedded_header_footer_cleanup", {})["enabled"] = False
 
     input_path = args.input or resolve_path(project_root, paths_cfg.get("input_dir", "data/input"))
     if not input_path.is_absolute():
@@ -495,6 +535,14 @@ def main() -> int:
     registry_path = resolve_path(project_root, paths_cfg.get("registry_report", "reports/registro_cambios.xlsx"))
     audit_json_path = resolve_path(project_root, paths_cfg.get("audit_report_json", "reports/auditoria_post_run.json"))
     audit_excel_path = resolve_path(project_root, paths_cfg.get("audit_report_excel", "reports/auditoria_post_run.xlsx"))
+    embedded_report_jsonl_path = resolve_path(
+        project_root,
+        paths_cfg.get("embedded_header_footer_report_jsonl", "reports/embedded_header_footer_cleanup.jsonl"),
+    )
+    embedded_report_excel_path = resolve_path(
+        project_root,
+        paths_cfg.get("embedded_header_footer_report_excel", "reports/embedded_header_footer_cleanup.xlsx"),
+    )
 
     docx_inputs = _find_inputs(input_path)
     if not docx_inputs:
@@ -503,10 +551,11 @@ def main() -> int:
 
     all_changes: list[ChangeRecord] = []
     all_skips: list[SkipRecord] = []
+    all_cleanup_records: list[EmbeddedArtifactRecord] = []
     output_by_document: dict[str, Path] = {}
     for docx_path in docx_inputs:
         print(f"[document] {docx_path.name}", file=sys.stderr)
-        working_path, changes, skips, _summaries = run_document(
+        working_path, changes, skips, _summaries, cleanup_records = run_document(
             input_path=docx_path,
             output_dir=output_dir,
             config=config,
@@ -518,6 +567,7 @@ def main() -> int:
         )
         all_changes.extend(changes)
         all_skips.extend(skips)
+        all_cleanup_records.extend(cleanup_records)
         output_by_document[docx_path.name] = working_path
         print(f"[document] output={working_path}", file=sys.stderr)
 
@@ -537,11 +587,15 @@ def main() -> int:
                 auto_repair=bool(post_audit_cfg.get("auto_repair", True)),
             )
             write_audit_report(audit_rows, audit_excel_path, audit_json_path)
+        cleanup_cfg = config.get("pipeline", {}).get("embedded_header_footer_cleanup", {})
+        if bool(cleanup_cfg.get("enabled", False)):
+            write_embedded_artifact_report(all_cleanup_records, embedded_report_excel_path, embedded_report_jsonl_path)
         append_changes_jsonl(all_changes, changes_path)
         write_registry([], all_skips, registry_path, existing_jsonl=changes_path, audit_rows=audit_rows)
 
     print(
-        f"Completed: {len(all_changes)} change(s), {len(all_skips)} skipped/review item(s).",
+        f"Completed: {len(all_changes)} change(s), {len(all_skips)} skipped/review item(s), "
+        f"{len(all_cleanup_records)} embedded artifact candidate(s).",
         file=sys.stderr,
     )
     return 0

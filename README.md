@@ -16,6 +16,8 @@ forma local con `config.local.yaml` sin tocar el repo:
 - `rules`: detectores, frase objetivo, formato de reemplazo, guardas y prompts.
 - `pipeline.max_passes`: numero maximo de pasadas.
 - `pipeline.use_llm_refine`: en esta rama queda en `false`.
+- `pipeline.embedded_header_footer_cleanup`: pre-limpieza de encabezados y pies
+    falsos incrustados en el cuerpo por conversiones PDF a DOCX.
 - `paths.input_dir`: por defecto apunta a `inputs/` para documentos editables
     sueltos.
 - `pipeline.post_audit`: auditoria final y reparacion segura de cambios obvios.
@@ -70,6 +72,31 @@ Correr sobre una carpeta de documentos:
 ```powershell
 venv\Scripts\python.exe -m rule_engine.pipeline --config config.yaml --input tmp\run_b25 --output tmp\run_b25_no_llm_reviewed --passes 3 --force --simple-only
 ```
+
+El pipeline ejecuta antes de las reglas una limpieza de pies/encabezados falsos
+incrustados en el cuerpo. La accion por defecto elimina o limpia texto de
+parrafos de alta confianza, conserva saltos de pagina/seccion cuando los hay y
+deja las tablas repetidas de metadata en revision. Para comparar sin esta capa:
+
+```powershell
+venv\Scripts\python.exe -m rule_engine.pipeline --config config.yaml --input tmp\run_b25 --output tmp\run_b25_no_cleanup --passes 3 --force --simple-only --skip-embedded-cleanup
+```
+
+Inspeccionar candidatos sin modificar documentos:
+
+```powershell
+venv\Scripts\python.exe scripts\inspect_embedded_headers_footers.py --input tmp\run_b25\P-PRPL-OC-506_modificado.docx --output reports\embedded_header_footer_preview.xlsx
+```
+
+Aplicar la limpieza sobre copias, manteniendo intacto el input original:
+
+```powershell
+venv\Scripts\python.exe scripts\inspect_embedded_headers_footers.py --input tmp\run_b25\P-PRPL-OC-506_modificado.docx --apply --output-dir tmp\oc506_footer_cleanup --output reports\embedded_header_footer_apply.xlsx
+```
+
+Si una revision manual confirma que las tablas repetidas tambien son encabezados
+convertidos, la utility permite incluirlas con `--remove-tables`; por defecto se
+reportan pero no se borran.
 
 Si quieres dejar `tmp/run_b25` como input por defecto solo en tu maquina, crea
 un `config.local.yaml` ignorado por git:
@@ -165,6 +192,10 @@ repo vecino. Para usar OpenAI directo en otra rama, cambia `llm_refine.model` a
 - `reports/registro_cambios.xlsx`: registro legible con cambios y omitidos.
 - `reports/auditoria_post_run.xlsx`: auditoria de cambios, QA flags y reparaciones.
 - `reports/auditoria_post_run.json`: misma auditoria en formato estructurado.
+- `reports/embedded_header_footer_cleanup.xlsx`: auditoria de pies/encabezados
+    falsos detectados, acciones propuestas/aplicadas y candidatos en revision.
+- `reports/embedded_header_footer_cleanup.jsonl`: misma auditoria en formato
+    estructurado.
 - `reports/referencia_resumen.md`: resumen del Excel manual.
 
 La corrida puede repetirse sobre el mismo output. Si el documento ya esta
