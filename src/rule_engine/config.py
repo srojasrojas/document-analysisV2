@@ -7,6 +7,21 @@ import os
 import yaml
 
 
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        existing = merged.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(existing, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _local_override_path(config_path: Path) -> Path:
+    return config_path.with_name(f"{config_path.stem}.local{config_path.suffix}")
+
+
 def load_config(path: str | Path) -> dict[str, Any]:
     config_path = Path(path)
     if not config_path.exists():
@@ -15,6 +30,15 @@ def load_config(path: str | Path) -> dict[str, Any]:
         data = yaml.safe_load(handle) or {}
     if not isinstance(data, dict):
         raise ValueError(f"Config root must be a mapping: {config_path}")
+
+    local_override_path = _local_override_path(config_path)
+    if local_override_path.exists():
+        with local_override_path.open("r", encoding="utf-8") as handle:
+            local_data = yaml.safe_load(handle) or {}
+        if not isinstance(local_data, dict):
+            raise ValueError(f"Config root must be a mapping: {local_override_path}")
+        data = _deep_merge(data, local_data)
+
     return data
 
 

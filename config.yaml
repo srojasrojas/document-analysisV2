@@ -1,5 +1,5 @@
 paths:
-  input_dir: data/input
+  input_dir: inputs
   output_dir: data/output
   reports_dir: reports
   changes_report: reports/changes.jsonl

@@ -5,6 +5,7 @@ venv/
 .env
 .env.*
 !.env.example
+config.local.yaml
 __pycache__/
 *.py[cod]
 *.egg-info/

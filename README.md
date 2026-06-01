@@ -10,11 +10,14 @@ celdas de tablas.
 
 ## Configuracion
 
-La configuracion principal vive en `config.yaml`:
+La configuracion principal vive en `config.yaml` y puede sobreescribirse de
+forma local con `config.local.yaml` sin tocar el repo:
 
 - `rules`: detectores, frase objetivo, formato de reemplazo, guardas y prompts.
 - `pipeline.max_passes`: numero maximo de pasadas.
 - `pipeline.use_llm_refine`: en esta rama queda en `false`.
+- `paths.input_dir`: por defecto apunta a `inputs/` para documentos editables
+    sueltos.
 - `pipeline.post_audit`: auditoria final y reparacion segura de cambios obvios.
 - `llm_refine.model`: perfil disponible, pero no usado mientras `use_llm_refine`
 	sea `false`.
@@ -51,16 +54,29 @@ Crear el mock `.docx` editable multi-regla:
 venv\Scripts\python.exe scripts\create_mock_docx.py
 ```
 
+Ese mock se escribe en `inputs/mock_reglas.docx`, que coincide con el input por
+defecto del pipeline.
+
 Correr el flujo deterministico sobre el mock:
 
 ```powershell
-venv\Scripts\python.exe -m rule_engine.pipeline --config config.yaml --input data\input\mock_reglas.docx --output data\output --passes 3 --force --simple-only
+venv\Scripts\python.exe -m rule_engine.pipeline --config config.yaml --input inputs\mock_reglas.docx --output data\output --passes 3 --force --simple-only
 ```
+
+Si no pasas `--input`, el pipeline toma por defecto la carpeta `inputs/`.
 
 Correr sobre una carpeta de documentos:
 
 ```powershell
 venv\Scripts\python.exe -m rule_engine.pipeline --config config.yaml --input tmp\run_b25 --output tmp\run_b25_no_llm_reviewed --passes 3 --force --simple-only
+```
+
+Si quieres dejar `tmp/run_b25` como input por defecto solo en tu maquina, crea
+un `config.local.yaml` ignorado por git:
+
+```yaml
+paths:
+    input_dir: tmp/run_b25
 ```
 
 Verificar que no haya duplicados de ninguna frase objetivo configurada:
@@ -135,7 +151,7 @@ repo vecino. Para usar OpenAI directo en otra rama, cambia `llm_refine.model` a
 
 ## Salidas
 
-- `data/input/mock_reglas.docx`: documento mock editable.
+- `inputs/mock_reglas.docx`: documento mock editable.
 - `data/output/mock_reglas_modificado.docx`: documento procesado.
 - `tmp/run_b25_no_llm_certified_supervisor_fixed/*.docx`: documentos reales
     procesados en modo no-LLM con operadores certificados y supervisor legado

@@ -7,7 +7,7 @@ from docx import Document
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-OUTPUT_PATH = PROJECT_ROOT / "data" / "input" / "mock_reglas.docx"
+OUTPUT_PATH = PROJECT_ROOT / "inputs" / "mock_reglas.docx"
 SAMPLES_PATH = PROJECT_ROOT / "reports" / "referencia_operador_samples.jsonl"
 
 
