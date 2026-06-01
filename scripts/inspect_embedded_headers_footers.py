@@ -19,6 +19,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--apply", action="store_true", help="Apply cleanup to copies in --output-dir")
     parser.add_argument("--output-dir", type=Path, help="Directory for cleaned DOCX copies when --apply is used")
     parser.add_argument("--remove-tables", action="store_true", help="Allow repeated metadata tables to be removed")
+    parser.add_argument("--no-write-footer", action="store_true", help="Do not reconstruct real DOCX footers")
+    parser.add_argument(
+        "--overwrite-existing-footer",
+        action="store_true",
+        help="Replace existing true DOCX footers when reconstructing",
+    )
     return parser.parse_args()
 
 
@@ -45,6 +51,10 @@ def main() -> int:
     cleanup_cfg["action"] = "remove" if args.apply else "preview"
     if args.remove_tables:
         cleanup_cfg["remove_table_artifacts"] = True
+    if args.no_write_footer:
+        cleanup_cfg["write_real_footer"] = False
+    if args.overwrite_existing_footer:
+        cleanup_cfg["overwrite_existing_footer"] = True
 
     input_path = args.input if args.input.is_absolute() else project_root / args.input
     docx_inputs = _find_inputs(input_path)
@@ -76,7 +86,12 @@ def main() -> int:
         )
         records.extend(document_records)
         applied = sum(1 for record in document_records if record.applied)
-        print(f"[embedded-cleanup] {docx_path.name}: candidates={len(document_records)} applied={applied}")
+        footer_actions = sum(1 for record in document_records if record.action in {"write_footer", "would_write_footer"})
+        protected_footers = sum(1 for record in document_records if record.action == "footer_protected_existing")
+        print(
+            f"[embedded-cleanup] {docx_path.name}: candidates={len(document_records)} "
+            f"applied={applied} footer_actions={footer_actions} protected_footers={protected_footers}"
+        )
 
     write_embedded_artifact_report(records, excel_path, jsonl_path)
     print(f"Report written: {excel_path}")

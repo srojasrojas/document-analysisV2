@@ -40,6 +40,11 @@ pipeline:
     remove_table_artifacts: false
     protect_front_matter_tables: true
     front_matter_table_count: 1
+    write_real_footer: true
+    overwrite_existing_footer: false
+    footer_table_width_inches: 7.0
+    footer_font_size_pt: 8
+    footer_write_first_even_variants: true
     patterns: []
     table_patterns: []
   post_audit:

@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from docx.document import Document as DocxDocument
+from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.shared import Inches, Pt
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
@@ -44,6 +48,11 @@ DEFAULT_CLEANUP_CONFIG: dict[str, Any] = {
     "remove_table_artifacts": False,
     "protect_front_matter_tables": True,
     "front_matter_table_count": 1,
+    "write_real_footer": True,
+    "overwrite_existing_footer": False,
+    "footer_table_width_inches": 7.0,
+    "footer_font_size_pt": 8,
+    "footer_write_first_even_variants": True,
     "patterns": [],
     "table_patterns": [],
 }
@@ -97,6 +106,41 @@ class _ArtifactCandidate:
     has_structural_break: bool = False
 
 
+@dataclass
+class _FooterMetadata:
+    version: str = ""
+    controlled_text: str = ""
+    authorization_date: str = ""
+    next_revision: str = ""
+    page_total: str = ""
+    source_locations: tuple[str, ...] = ()
+
+    def is_sufficient(self) -> bool:
+        strong_signals = sum(
+            bool(value)
+            for value in (
+                self.controlled_text,
+                self.authorization_date,
+                self.next_revision,
+                self.page_total,
+            )
+        )
+        return strong_signals >= 2 and bool(self.page_total or self.controlled_text)
+
+    def summary_text(self) -> str:
+        parts: list[str] = []
+        if self.version:
+            parts.append(f"Versión {self.version}")
+        if self.controlled_text:
+            parts.append(self.controlled_text)
+        if self.authorization_date:
+            parts.append(self.authorization_date)
+        parts.append("Página PAGE de NUMPAGES")
+        if self.next_revision:
+            parts.append(self.next_revision)
+        return " | ".join(parts)
+
+
 def resolve_cleanup_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     resolved = dict(DEFAULT_CLEANUP_CONFIG)
     for key, value in (config or {}).items():
@@ -114,16 +158,29 @@ def run_embedded_artifact_cleanup(
     dry_run: bool = True,
 ) -> list[EmbeddedArtifactRecord]:
     cleanup_config = resolve_cleanup_config(config)
+    document_label = document_name or Path(doc_path).name
     doc = load_docx(doc_path)
-    candidates = _scan_candidates(doc, document_name or Path(doc_path).name, cleanup_config)
+    candidates = _scan_candidates(doc, document_label, cleanup_config)
 
     should_apply = cleanup_config.get("action") == "remove" and not dry_run
+    footer_record, footer_changed = _footer_reconstruction_record(
+        doc,
+        candidates,
+        document_name=document_label,
+        config=cleanup_config,
+        apply_changes=should_apply,
+    )
     changed = False
     if should_apply:
         changed = _apply_candidates(candidates)
+        if footer_changed:
+            changed = True
         if changed:
             save_docx(doc, doc_path)
-    return [candidate.record for candidate in candidates]
+    records = [candidate.record for candidate in candidates]
+    if footer_record is not None:
+        records.append(footer_record)
+    return records
 
 
 def scan_embedded_artifacts(
@@ -245,6 +302,14 @@ def _paragraph_candidate(
     ):
         confidence = max(confidence, 0.86)
         reasons.append("numeric_version_neighbor")
+
+    if normalized == "pagina" and any(re.fullmatch(r"\d+\s+de\s+\d+", neighbor) for neighbor in neighbor_norms):
+        confidence = max(confidence, 0.88)
+        reasons.append("page_number_footer")
+
+    if re.fullmatch(r"\d+\s+de\s+\d+", normalized) and any(neighbor == "pagina" for neighbor in neighbor_norms):
+        confidence = max(confidence, 0.88)
+        reasons.append("page_number_footer_fragment")
 
     if len(normalized) <= 90 and metadata_neighbor_count >= 2:
         confidence = max(confidence, 0.74)
@@ -425,6 +490,376 @@ def _apply_candidates(candidates: list[_ArtifactCandidate]) -> bool:
     return changed
 
 
+def _footer_reconstruction_record(
+    doc: DocxDocument,
+    candidates: list[_ArtifactCandidate],
+    *,
+    document_name: str,
+    config: dict[str, Any],
+    apply_changes: bool,
+) -> tuple[EmbeddedArtifactRecord | None, bool]:
+    if not bool(config.get("write_real_footer", True)):
+        return None, False
+
+    metadata = _extract_footer_metadata(candidates)
+    if not metadata.is_sufficient():
+        if not _has_footer_source_candidates(candidates):
+            return None, False
+        return (
+            _make_footer_record(
+                document_name=document_name,
+                action="footer_write_skipped_insufficient_metadata",
+                metadata=metadata,
+                reasons=["insufficient_footer_metadata"],
+                applied=False,
+                confidence=0.0,
+            ),
+            False,
+        )
+
+    if _existing_true_footer_present(doc) and not bool(config.get("overwrite_existing_footer", False)):
+        return (
+            _make_footer_record(
+                document_name=document_name,
+                action="footer_protected_existing",
+                metadata=metadata,
+                reasons=["existing_true_footer_detected", "overwrite_existing_footer_disabled"],
+                applied=False,
+            ),
+            False,
+        )
+
+    action = "write_footer" if apply_changes else "would_write_footer"
+    if apply_changes:
+        _write_real_footer(doc, metadata, config)
+    return (
+        _make_footer_record(
+            document_name=document_name,
+            action=action,
+            metadata=metadata,
+            reasons=["reconstructed_real_footer", "dynamic_page_fields"],
+            applied=apply_changes,
+        ),
+        apply_changes,
+    )
+
+
+def _extract_footer_metadata(candidates: list[_ArtifactCandidate]) -> _FooterMetadata:
+    version_values: list[str] = []
+    controlled_values: list[str] = []
+    authorization_values: list[str] = []
+    next_revision_values: list[str] = []
+    page_total_values: list[str] = []
+    source_locations: list[str] = []
+
+    body_candidates = [
+        candidate
+        for candidate in candidates
+        if candidate.record.block_type == "body" and candidate.record.action != "protected"
+    ]
+    candidates_by_body_index = {
+        candidate.body_index: candidate
+        for candidate in body_candidates
+        if candidate.body_index is not None
+    }
+
+    for candidate in body_candidates:
+        record = candidate.record
+        normalized = record.normalized_text
+        if not _is_footer_source_record(record):
+            continue
+        source_locations.append(record.location)
+
+        version_match = re.fullmatch(r"version\s+(\d+(?:\.\d+){0,2})", normalized)
+        if version_match:
+            version_values.append(version_match.group(1))
+        elif normalized == "version" and candidate.body_index is not None:
+            next_candidate = candidates_by_body_index.get(candidate.body_index + 1)
+            if next_candidate and re.fullmatch(r"\d+(?:\.\d+){0,2}", next_candidate.record.normalized_text):
+                version_values.append(next_candidate.record.text)
+        elif "numeric_version_neighbor" in record.reasons and re.fullmatch(r"\d+(?:\.\d+){0,2}", normalized):
+            version_values.append(record.text)
+
+        if "este es un documento controlado" in normalized:
+            controlled_values.append(record.text)
+        if "fecha de autorizacion" in normalized:
+            authorization_values.append(record.text)
+        if "proxima revision" in normalized:
+            next_revision_values.append(record.text)
+        page_match = re.fullmatch(r"pagina\s+\d+(?:\s+de\s+(\d+))?", normalized)
+        if page_match and page_match.group(1):
+            page_total_values.append(page_match.group(1))
+        page_fragment_match = re.fullmatch(r"\d+\s+de\s+(\d+)", normalized)
+        if page_fragment_match and "page_number_footer_fragment" in record.reasons:
+            page_total_values.append(page_fragment_match.group(1))
+
+    return _FooterMetadata(
+        version=_most_common_text(version_values),
+        controlled_text=_most_common_text(controlled_values),
+        authorization_date=_most_common_text(authorization_values),
+        next_revision=_most_common_text(next_revision_values),
+        page_total=_largest_number_text(page_total_values),
+        source_locations=tuple(_unique(source_locations)),
+    )
+
+
+def _has_footer_source_candidates(candidates: list[_ArtifactCandidate]) -> bool:
+    return any(_is_footer_source_record(candidate.record) for candidate in candidates)
+
+
+def _is_footer_source_record(record: EmbeddedArtifactRecord) -> bool:
+    if record.block_type != "body" or record.action == "protected":
+        return False
+    footer_reasons = {
+        "authorization_date_footer",
+        "controlled_document_footer",
+        "footer_label_version",
+        "next_revision_footer",
+        "numeric_version_neighbor",
+        "page_number_footer",
+        "page_number_footer_fragment",
+    }
+    return bool(footer_reasons.intersection(record.reasons))
+
+
+def _make_footer_record(
+    *,
+    document_name: str,
+    action: str,
+    metadata: _FooterMetadata,
+    reasons: list[str],
+    applied: bool,
+    confidence: float = 1.0,
+) -> EmbeddedArtifactRecord:
+    text = metadata.summary_text()
+    return EmbeddedArtifactRecord(
+        document_name=document_name,
+        location="footer:default",
+        block_type="footer",
+        action=action,
+        confidence=confidence,
+        reasons=[*reasons, *[f"source:{location}" for location in metadata.source_locations[:8]]],
+        text=text,
+        normalized_text=normalize_text(text),
+        applied=applied,
+        candidate_id=_candidate_id(document_name, "footer:default", text),
+    )
+
+
+def _existing_true_footer_present(doc: DocxDocument) -> bool:
+    return any(_story_has_visible_content(story) for story in _footer_stories(doc))
+
+
+def _story_has_visible_content(story: Any) -> bool:
+    if any(_compact(paragraph.text) for paragraph in story.paragraphs):
+        return True
+    return any(_table_text(table) for table in story.tables)
+
+
+def _footer_stories(doc: DocxDocument) -> list[Any]:
+    stories: list[Any] = []
+    use_even_footer = bool(getattr(doc.settings, "odd_and_even_pages_header_footer", False))
+    for section in doc.sections:
+        stories.append(section.footer)
+        if section.different_first_page_header_footer:
+            stories.append(section.first_page_footer)
+        if use_even_footer:
+            stories.append(section.even_page_footer)
+    return stories
+
+
+def _header_footer_stories(doc: DocxDocument) -> list[Any]:
+    stories: list[Any] = []
+    use_even_footer = bool(getattr(doc.settings, "odd_and_even_pages_header_footer", False))
+    for section in doc.sections:
+        stories.extend((section.header, section.footer))
+        if section.different_first_page_header_footer:
+            stories.extend((section.first_page_header, section.first_page_footer))
+        if use_even_footer:
+            stories.extend((section.even_page_header, section.even_page_footer))
+    return stories
+
+
+def _write_real_footer(doc: DocxDocument, metadata: _FooterMetadata, config: dict[str, Any]) -> None:
+    sections = list(doc.sections)
+    if not sections:
+        return
+
+    first_section = sections[0]
+    first_section.footer.is_linked_to_previous = False
+    _write_footer_story(first_section.footer, metadata, config)
+
+    if bool(config.get("footer_write_first_even_variants", True)):
+        if first_section.different_first_page_header_footer:
+            first_section.first_page_footer.is_linked_to_previous = False
+            _write_footer_story(first_section.first_page_footer, metadata, config)
+        if bool(getattr(doc.settings, "odd_and_even_pages_header_footer", False)):
+            first_section.even_page_footer.is_linked_to_previous = False
+            _write_footer_story(first_section.even_page_footer, metadata, config)
+
+    for section in sections[1:]:
+        section.footer.is_linked_to_previous = True
+        if section.different_first_page_header_footer:
+            section.first_page_footer.is_linked_to_previous = True
+        if bool(getattr(doc.settings, "odd_and_even_pages_header_footer", False)):
+            section.even_page_footer.is_linked_to_previous = True
+
+    _enable_field_updates(doc)
+
+
+def _write_footer_story(story: Any, metadata: _FooterMetadata, config: dict[str, Any]) -> None:
+    _clear_story_content(story)
+    width_inches = float(config.get("footer_table_width_inches", 7.0))
+    font_size_pt = float(config.get("footer_font_size_pt", 8))
+    table = story.add_table(rows=2, cols=3, width=Inches(width_inches))
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = True
+    _set_table_borders_none(table)
+
+    for row in table.rows:
+        for cell in row.cells:
+            cell.width = Inches(width_inches / 3)
+
+    _set_cell_lines(
+        table.cell(0, 0),
+        [("Versión", True), (metadata.version or "", False)],
+        alignment=WD_ALIGN_PARAGRAPH.LEFT,
+        font_size_pt=font_size_pt,
+    )
+    _set_cell_lines(
+        table.cell(0, 1),
+        [(metadata.authorization_date, False)],
+        alignment=WD_ALIGN_PARAGRAPH.CENTER,
+        font_size_pt=font_size_pt,
+    )
+    _set_page_cell(table.cell(0, 2), metadata, font_size_pt=font_size_pt)
+    _set_cell_lines(
+        table.cell(1, 0),
+        [(metadata.controlled_text, False)],
+        alignment=WD_ALIGN_PARAGRAPH.LEFT,
+        font_size_pt=font_size_pt,
+    )
+    _set_cell_lines(
+        table.cell(1, 1),
+        [],
+        alignment=WD_ALIGN_PARAGRAPH.CENTER,
+        font_size_pt=font_size_pt,
+    )
+    _set_cell_lines(
+        table.cell(1, 2),
+        [(metadata.next_revision, False)],
+        alignment=WD_ALIGN_PARAGRAPH.RIGHT,
+        font_size_pt=font_size_pt,
+    )
+
+
+def _clear_story_content(story: Any) -> None:
+    for child in list(story._element):
+        story._element.remove(child)
+
+
+def _set_cell_lines(
+    cell: Any,
+    lines: list[tuple[str, bool]],
+    *,
+    alignment: WD_ALIGN_PARAGRAPH,
+    font_size_pt: float,
+) -> None:
+    cell.text = ""
+    paragraph = cell.paragraphs[0]
+    paragraph.alignment = alignment
+    wrote_line = False
+    for text, bold in lines:
+        if not text:
+            continue
+        target_paragraph = paragraph if not wrote_line else cell.add_paragraph()
+        target_paragraph.alignment = alignment
+        run = target_paragraph.add_run(text)
+        run.bold = bold
+        run.font.size = Pt(font_size_pt)
+        wrote_line = True
+
+
+def _set_page_cell(cell: Any, metadata: _FooterMetadata, *, font_size_pt: float) -> None:
+    cell.text = ""
+    paragraph = cell.paragraphs[0]
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    _add_sized_run(paragraph, "Página ", font_size_pt)
+    _add_field(paragraph, "PAGE", "1", font_size_pt=font_size_pt)
+    _add_sized_run(paragraph, " de ", font_size_pt)
+    _add_field(paragraph, "NUMPAGES", metadata.page_total or "1", font_size_pt=font_size_pt)
+
+
+def _add_sized_run(paragraph: Paragraph, text: str, font_size_pt: float) -> None:
+    run = paragraph.add_run(text)
+    run.font.size = Pt(font_size_pt)
+
+
+def _add_field(paragraph: Paragraph, instruction: str, display: str, *, font_size_pt: float) -> None:
+    begin_run = paragraph.add_run()
+    begin_run.font.size = Pt(font_size_pt)
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+    begin_run._r.append(begin)
+
+    instruction_run = paragraph.add_run()
+    instruction_run.font.size = Pt(font_size_pt)
+    instruction_text = OxmlElement("w:instrText")
+    instruction_text.set(qn("xml:space"), "preserve")
+    instruction_text.text = f" {instruction} "
+    instruction_run._r.append(instruction_text)
+
+    separate_run = paragraph.add_run()
+    separate_run.font.size = Pt(font_size_pt)
+    separate = OxmlElement("w:fldChar")
+    separate.set(qn("w:fldCharType"), "separate")
+    separate_run._r.append(separate)
+
+    display_run = paragraph.add_run(display)
+    display_run.font.size = Pt(font_size_pt)
+
+    end_run = paragraph.add_run()
+    end_run.font.size = Pt(font_size_pt)
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+    end_run._r.append(end)
+
+
+def _enable_field_updates(doc: DocxDocument) -> None:
+    settings = doc.settings._element
+    update_fields = settings.find(qn("w:updateFields"))
+    if update_fields is None:
+        update_fields = OxmlElement("w:updateFields")
+        settings.append(update_fields)
+    update_fields.set(qn("w:val"), "true")
+
+
+def _set_table_borders_none(table: Table) -> None:
+    table_properties = table._tbl.tblPr
+    for existing_borders in table_properties.findall(qn("w:tblBorders")):
+        table_properties.remove(existing_borders)
+    borders = OxmlElement("w:tblBorders")
+    for border_name in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        border = OxmlElement(f"w:{border_name}")
+        border.set(qn("w:val"), "nil")
+        borders.append(border)
+    table_properties.append(borders)
+
+
+def _most_common_text(values: list[str]) -> str:
+    compacted = [_compact(value) for value in values if _compact(value)]
+    if not compacted:
+        return ""
+    return Counter(compacted).most_common(1)[0][0]
+
+
+def _largest_number_text(values: list[str]) -> str:
+    numbers = [int(value) for value in values if re.fullmatch(r"\d+", _compact(value))]
+    if numbers:
+        return str(max(numbers))
+    return _most_common_text(values)
+
+
 def _score_metadata_text(normalized: str, reasons: list[str], config: dict[str, Any]) -> float:
     score = 0.0
     if normalized == "version" or re.fullmatch(r"version\s+\d+(?:\.\d+){0,2}", normalized):
@@ -469,14 +904,13 @@ def _table_label_hits(normalized: str, config: dict[str, Any]) -> int:
 
 def _real_header_footer_texts(doc: DocxDocument) -> set[str]:
     texts: set[str] = set()
-    for section in doc.sections:
-        for story in (section.header, section.footer):
-            for paragraph in story.paragraphs:
-                normalized = normalize_text(paragraph.text)
-                if normalized:
-                    texts.add(normalized)
-            for table in story.tables:
-                texts.update(text for text in _table_cell_norms(table) if text)
+    for story in _header_footer_stories(doc):
+        for paragraph in story.paragraphs:
+            normalized = normalize_text(paragraph.text)
+            if normalized:
+                texts.add(normalized)
+        for table in story.tables:
+            texts.update(text for text in _table_cell_norms(table) if text)
     return texts
 
 

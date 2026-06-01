@@ -75,8 +75,11 @@ venv\Scripts\python.exe -m rule_engine.pipeline --config config.yaml --input tmp
 
 El pipeline ejecuta antes de las reglas una limpieza de pies/encabezados falsos
 incrustados en el cuerpo. La accion por defecto elimina o limpia texto de
-parrafos de alta confianza, conserva saltos de pagina/seccion cuando los hay y
-deja las tablas repetidas de metadata en revision. Para comparar sin esta capa:
+parrafos de alta confianza, reconstruye un pie de pagina real de Word cuando
+detecta metadata recurrente suficiente, conserva saltos de pagina/seccion cuando
+los hay y deja las tablas repetidas de metadata en revision. La reconstruccion
+usa campos dinamicos `PAGE` y `NUMPAGES`, por lo que Word actualiza la numeracion
+al abrir el documento. Para comparar sin esta capa:
 
 ```powershell
 venv\Scripts\python.exe -m rule_engine.pipeline --config config.yaml --input tmp\run_b25 --output tmp\run_b25_no_cleanup --passes 3 --force --simple-only --skip-embedded-cleanup
@@ -93,6 +96,13 @@ Aplicar la limpieza sobre copias, manteniendo intacto el input original:
 ```powershell
 venv\Scripts\python.exe scripts\inspect_embedded_headers_footers.py --input tmp\run_b25\P-PRPL-OC-506_modificado.docx --apply --output-dir tmp\oc506_footer_cleanup --output reports\embedded_header_footer_apply.xlsx
 ```
+
+El modo `--apply` tambien reconstruye un footer real si los candidatos detectados
+contienen version, texto de documento controlado, fecha/revision o paginacion
+recurrente. Usa `--no-write-footer` para comparar una limpieza sin reconstruccion.
+Los footers reales existentes se protegen por defecto; `--overwrite-existing-footer`
+solo debe usarse en copias de prueba cuando la revision manual confirme que hay
+que reemplazarlos.
 
 Si una revision manual confirma que las tablas repetidas tambien son encabezados
 convertidos, la utility permite incluirlas con `--remove-tables`; por defecto se

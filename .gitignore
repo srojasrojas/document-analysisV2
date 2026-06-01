@@ -17,3 +17,4 @@ reports/
 *.log
 ~$*.docx
 reporte_run_b25.md
+inputs/docs/
