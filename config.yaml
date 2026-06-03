@@ -1,5 +1,5 @@
 paths:
-  input_dir: inputs
+  input_dir: data/input/docs
   output_dir: data/output
   reports_dir: reports
   changes_report: reports/changes.jsonl
@@ -47,6 +47,10 @@ pipeline:
     footer_write_first_even_variants: true
     patterns: []
     table_patterns: []
+    remove_header_table_artifacts: true
+    header_table_front_matter_count: 1
+    write_real_header: true
+    overwrite_existing_header: false
   post_audit:
     enabled: true
     auto_repair: true
@@ -66,11 +70,12 @@ rules:
       regex: "(?i)(?<![A-Za-z0-9_])operador(?:\\s*/\\s*a|\\s*\\([aA]\\)|a|es|as)?(?:\\s+a\\s+cargo)?(?:\\s+(?:(?:de|del)\\s+(?:(?:el|la|los|las)\\s+)?)?(?:planta(?:\\s+concentradora)?|equipos?|terreno|sala(?:\\s+de\\s+control)?|control|zona\\s+aut[oó]noma|puentes?\\s+gr[uú]as?|gr[uú]a(?:\\s+horquilla)?|patio(?:\\s+(?:de\\s+)?(?:embarque|c[aá]todos))?(?:\\s+Spence)?|esparcidor|mini\\s*-?\\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\\s+frontal)?|retro\\s*-?\\s*excavadora(?:s)?|excavador(?:a|es)?|cami[oó]n(?:es)?(?:\\s+(?:tolva|pluma))?|camioneta|mina|[aá]rea|proceso|procesos|chancado|molienda|flotaci[oó]n|relaves|maquinaria|operaciones|correas?|apilador(?:a)?|rotopalas?|picarocas?|nave\\s+ew|c[aá]todos|sx|tf|cas|Spence(?:\\s+debidamente\\s+certificad[oa]s?(?:\\s+en\\s+operaci[oó]n\\s+de\\s+puentes?\\s+gr[uú]as?)?)?|(?:MLDC|MDC|EW)(?:\\s+Spence)?|m[aá]quina\\s+despegadora(?:\\s+de\\s+c[aá]todos)?|otras\\s+[aá]reas|circuitos?(?:\\s+de\\s+EW)?|encargad[oa]\\s+(?:de\\s+los\\s+circuitos\\s+de\\s+EW|del\\s+puente\\s+gr[uú]a)))?(?:\\s+(?:autorizad[oa]s?|calificad[oa]s?|capacitad[oa]s?|certificad[oa]s?|competente(?:s)?|habilitad[oa]s?|acreditad[oa]s?|entrenad[oa]s?|designad[oa]s?))?(?![A-Za-z0-9_])"
     replacement:
       mode: expansion
-      target_phrase: personal designado por minera Spence
+      target_phrase: personal designado por Minera Spence
       connector: o
       format: "{matched} {connector} {target}"
       upgradeable_target_phrases:
         - personal designado por minera Spence
+        - personal certificado designado por minera Spence
       conditional_targets:
         - target_phrase: personal calificado
           reason: qualification_or_technical_operator_context
@@ -78,15 +83,17 @@ rules:
           patterns:
             - "(?i)\\b(?:autorizad[oa]s?|calificad[oa]s?|capacitad[oa]s?|competente(?:s)?|habilitad[oa]s?|acreditad[oa]s?|entrenad[oa]s?)\\b"
             - "(?i)\\b(?:bloqueo|bloquear|desbloqueo|desbloquear|loto|energizaci[oó]n|energizar|desenergizaci[oó]n|desenergizar|hmi|panel\\s+de\\s+control|reset|el[eé]ctric[oa]s?|instrumentaci[oó]n|mantenci[oó]n|calibraci[oó]n|calibrar|homologaci[oó]n|diagn[oó]stico)\\b"
-        - target_phrase: personal certificado designado por minera Spence
+        - target_phrase: personal certificado designado por Minera Spence
           reason: equipment_certification_required
           context_window_chars: 180
           match_patterns:
-            - "(?i)\\b(?:retro\\s*-?\\s*excavadora(?:s)?|mini\\s*-?\\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\\s+frontal)?|excavador(?:a|es)?|cami[oó]n(?:es)?\\s+(?:tolva|pluma)|rotopalas?|apilador(?:a)?|esparcidor|picarocas?|puentes?\\s+gr[uú]as?|gr[uú]a\\s+horquilla|maquinaria|equipos?|certificad[oa]s?)\\b"
+            - "(?i)\\b(?:retro\\s*-?\\s*excavadora(?:s)?|mini\\s*-?\\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\\s+frontal)?|excavador(?:a|es)?|cami[oó]n(?:es)?\\s+(?:tolva|pluma)|rotopalas?|apilador(?:a)?|esparcidor|picarocas?|puentes?\\s+gr[uú]as?|gr[uú]a\\s+horquilla|maquinaria)\\b"
+          patterns:
+            - "(?i)\\b(?:retro\\s*-?\\s*excavadora(?:s)?|mini\\s*-?\\s*cargador(?:a|es)?|cargador(?:a|es)?(?:\\s+frontal)?|excavador(?:a|es)?|cami[oó]n(?:es)?\\s+(?:tolva|pluma)|rotopalas?|apilador(?:a)?|esparcidor|picarocas?|puentes?\\s+gr[uú]as?|gr[uú]a\\s+horquilla|maquinaria)\\b"
     guards:
       skip_if_target_exists_in_paragraph: false
       skip_if_alternative_exists: true
-      alternative_pattern: "(?i)^\\s*(?:o|/|y/o)\\s+(?!(?:personal\\s+designado\\s+por\\s+minera\\s+Spence|personal\\s+certificado\\s+designado\\s+por\\s+minera\\s+Spence|personal\\s+calificado))"
+      alternative_pattern: "(?i)^\\s*(?:o|/|y/o)\\s+(?!(?:personal\\s+designado\\s+por\\s+Minera\\s+Spence|personal\\s+certificado\\s+designado\\s+por\\s+Minera\\s+Spence|personal\\s+calificado))"
       required_context_patterns:
         - "(?i)\\b(?:debe(?:n|r[aá]n?|r[aá])?|realiza(?:r|n)?|revisa(?:r|n)?|verifica(?:r|n)?|detiene(?:r|n)?|opera(?:r|n)?|inspecciona(?:r|n)?|coordina(?:r|n)?|informa(?:r|n)?|avisa(?:r|n)?|solicita(?:r|n)?|autoriza(?:r|n)?|registra(?:r|n)?|bloquea(?:r|n)?|desbloquea(?:r|n)?|energiza(?:r|n)?|desenergiza(?:r|n)?|comunica(?:r|n)?)\\b"
         - "(?i)\\b(?:dar|da|dando)\\s+aviso\\s+a\\b"

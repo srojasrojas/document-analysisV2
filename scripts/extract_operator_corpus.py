@@ -100,10 +100,10 @@ def _classify(text: str, section_path: tuple[str, ...], match: re.Match[str]) ->
     if CERTIFIED_EQUIPMENT_RE.search(match.group(0)):
         return (
             "expand_personal_certificado_designado",
-            "personal certificado designado por minera Spence",
+            "personal certificado designado por Minera Spence",
             "Certified equipment operator context",
         )
-    return "expand_spence", "personal designado por minera Spence", "Operational operator responsibility"
+    return "expand_spence", "personal designado por Minera Spence", "Operational operator responsibility"
 
 
 def _docx_candidates(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:

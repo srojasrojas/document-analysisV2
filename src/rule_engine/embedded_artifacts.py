@@ -55,6 +55,10 @@ DEFAULT_CLEANUP_CONFIG: dict[str, Any] = {
     "footer_write_first_even_variants": True,
     "patterns": [],
     "table_patterns": [],
+    "remove_header_table_artifacts": False,
+    "header_table_front_matter_count": 1,
+    "write_real_header": True,
+    "overwrite_existing_header": False,
 }
 
 DEFAULT_PATTERNS = [
@@ -72,6 +76,12 @@ DEFAULT_TABLE_PATTERNS = [
     r"\baprobo\b",
     r"\bfecha\s+de\s+autorizacion\b",
 ]
+
+_IMAGE_RELTYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+_BLIP_QNAME = "{http://schemas.openxmlformats.org/drawingml/2006/main}blip"
+_R_EMBED_QNAME = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
+_HEADER_APPROVAL_RE = re.compile(r"\b(elaboro|reviso|aprobo)\b")
+_HEADER_DOC_CODE_RE = re.compile(r"\bp-[a-z]+-[a-z]+-\d{3,}\b")
 
 
 @dataclass
@@ -94,6 +104,16 @@ class _TableInfo:
     text: str
     normalized: str
     signature: str
+
+
+@dataclass
+class _HeaderTableInfo:
+    table: Table
+    index: int
+    location: str
+    text: str
+    normalized: str
+    tbl_element: Any
 
 
 @dataclass
@@ -163,6 +183,13 @@ def run_embedded_artifact_cleanup(
     candidates = _scan_candidates(doc, document_label, cleanup_config)
 
     should_apply = cleanup_config.get("action") == "remove" and not dry_run
+    header_record, header_changed = _header_reconstruction_record(
+        doc,
+        candidates,
+        document_name=document_label,
+        config=cleanup_config,
+        apply_changes=should_apply,
+    )
     footer_record, footer_changed = _footer_reconstruction_record(
         doc,
         candidates,
@@ -173,11 +200,13 @@ def run_embedded_artifact_cleanup(
     changed = False
     if should_apply:
         changed = _apply_candidates(candidates)
-        if footer_changed:
+        if header_changed or footer_changed:
             changed = True
         if changed:
             save_docx(doc, doc_path)
     records = [candidate.record for candidate in candidates]
+    if header_record is not None:
+        records.append(header_record)
     if footer_record is not None:
         records.append(footer_record)
     return records
@@ -232,6 +261,19 @@ def _scan_candidates(
             occurrence_count=table_counts[info.signature],
             real_header_footer_texts=real_header_footer_texts,
             config=config,
+        )
+        if candidate:
+            candidates.append(candidate)
+
+    header_table_infos = _header_table_infos(tables)
+    header_sig_counts = Counter(info.normalized for info in header_table_infos if info.normalized)
+    for position, info in enumerate(header_table_infos):
+        candidate = _header_table_candidate(
+            info,
+            document_name=document_name,
+            occurrence_count=header_sig_counts[info.normalized],
+            config=config,
+            header_table_position=position,
         )
         if candidate:
             candidates.append(candidate)
@@ -990,6 +1032,312 @@ def _remove_table(table: Table) -> None:
     parent = element.getparent()
     if parent is not None:
         parent.remove(element)
+
+
+# ---------------------------------------------------------------------------
+# Embedded header-table detection and cleanup
+# ---------------------------------------------------------------------------
+
+def _is_embedded_header_table(table: Table) -> bool:
+    """Return True when the table matches the BHP cover-page header pattern.
+
+    Requires at least 2 of 3 signals:
+      1. Image (a:blip) in the first cell of the first row
+      2. Approval-row keywords (elaboro/reviso/aprobo) in normalised text
+      3. Document-code pattern (p-area-section-NNN)
+    """
+    normalized = normalize_text(_table_text(table))
+    signals = 0
+
+    tbl_elem = table._tbl
+    rows = tbl_elem.findall(qn("w:tr"))
+    if rows:
+        first_row_cells = rows[0].findall(qn("w:tc"))
+        if first_row_cells:
+            if first_row_cells[0].findall(".//" + _BLIP_QNAME):
+                signals += 1
+
+    if _HEADER_APPROVAL_RE.search(normalized):
+        signals += 1
+
+    if _HEADER_DOC_CODE_RE.search(normalized):
+        signals += 1
+
+    return signals >= 2
+
+
+def _header_table_infos(table_infos: list[_TableInfo]) -> list[_HeaderTableInfo]:
+    result: list[_HeaderTableInfo] = []
+    for info in table_infos:
+        if _is_embedded_header_table(info.table):
+            result.append(
+                _HeaderTableInfo(
+                    table=info.table,
+                    index=info.index,
+                    location=f"header_table[{info.index}]",
+                    text=info.text,
+                    normalized=info.normalized,
+                    tbl_element=info.table._tbl,
+                )
+            )
+    return result
+
+
+def _header_table_candidate(
+    info: _HeaderTableInfo,
+    *,
+    document_name: str,
+    occurrence_count: int,
+    config: dict[str, Any],
+    header_table_position: int,
+) -> _ArtifactCandidate | None:
+    reasons: list[str] = []
+    confidence = 0.0
+
+    if _HEADER_APPROVAL_RE.search(info.normalized):
+        confidence = max(confidence, 0.80)
+        reasons.append("header_approval_row")
+
+    if _HEADER_DOC_CODE_RE.search(info.normalized):
+        confidence = max(confidence, 0.75)
+        reasons.append("header_document_code")
+
+    rows = info.tbl_element.findall(qn("w:tr"))
+    if rows:
+        first_cells = rows[0].findall(qn("w:tc"))
+        if first_cells and first_cells[0].findall(".//" + _BLIP_QNAME):
+            confidence = max(confidence, 0.72)
+            reasons.append("header_logo_image")
+
+    if {"header_approval_row", "header_document_code", "header_logo_image"}.issubset(set(reasons)):
+        confidence = max(confidence, 0.95)
+        reasons.append("all_header_signals_present")
+
+    if occurrence_count >= 3:
+        confidence = min(1.0, confidence + 0.10)
+        reasons.append("recurring_header_table")
+
+    confidence = max(0.0, min(1.0, confidence))
+    if confidence < float(config.get("min_confidence_review", 0.45)):
+        return None
+
+    action = _action_for_header_table(info, confidence, config, reasons, header_table_position=header_table_position)
+    record = EmbeddedArtifactRecord(
+        document_name=document_name,
+        location=info.location,
+        block_type="header_table",
+        action=action,
+        confidence=round(confidence, 3),
+        reasons=_unique(reasons),
+        text=info.text,
+        normalized_text=info.normalized,
+        table_index=info.index,
+        occurrence_count=occurrence_count,
+        recurring_group_id=_hash_id(info.normalized) if occurrence_count > 1 else "",
+        candidate_id=_candidate_id(document_name, info.location, info.text),
+    )
+    return _ArtifactCandidate(record=record, table=info.table, table_index=info.index)
+
+
+def _action_for_header_table(
+    info: _HeaderTableInfo,
+    confidence: float,
+    config: dict[str, Any],
+    reasons: list[str],
+    *,
+    header_table_position: int,
+) -> str:
+    action = str(config.get("action", "preview")).lower()
+    min_remove = float(config.get("min_confidence_remove", 0.82))
+    remove_header_tables = bool(config.get("remove_header_table_artifacts", False))
+    front_matter_count = int(config.get("header_table_front_matter_count", 1))
+
+    if header_table_position < front_matter_count:
+        reasons.append("protected_front_matter_header_table")
+        return "protected"
+    if not remove_header_tables:
+        reasons.append("header_table_removal_disabled")
+        return "review"
+    if confidence < min_remove:
+        return "review"
+    if action == "remove":
+        return "remove_table"
+    if action == "exclude":
+        return "exclude"
+    return "would_remove_table"
+
+
+def _copy_table_element_to_header_part(
+    tbl_element: Any,
+    source_part: Any,
+    header_part: Any,
+) -> bool:
+    """Deep-copy tbl_element into header_part, rewiring image relationships.
+
+    Returns True on success, False on non-fatal failure (caller skips header
+    creation rather than writing a potentially corrupt file).
+    """
+    from copy import deepcopy
+
+    try:
+        tbl_copy = deepcopy(tbl_element)
+    except Exception:
+        return False
+
+    for blip in tbl_copy.iter(_BLIP_QNAME):
+        old_rid = blip.get(_R_EMBED_QNAME)
+        if not old_rid:
+            continue
+        try:
+            image_part = source_part.related_parts[old_rid]
+            new_rid = header_part.relate_to(image_part, _IMAGE_RELTYPE)
+            blip.set(_R_EMBED_QNAME, new_rid)
+        except KeyError:
+            continue
+        except Exception:
+            return False
+
+    hdr_elem = header_part.element
+    children = list(hdr_elem)
+    insert_pos = next(
+        (i for i, c in enumerate(children) if c.tag == qn("w:p")),
+        len(children),
+    )
+    hdr_elem.insert(insert_pos, tbl_copy)
+    return True
+
+
+def _write_real_header(
+    doc: DocxDocument,
+    first_header_tbl_element: Any,
+    config: dict[str, Any],
+) -> bool:
+    sections = list(doc.sections)
+    if not sections:
+        return False
+
+    first_section = sections[0]
+    first_section.header.is_linked_to_previous = False
+    header = first_section.header
+    _clear_story_content(header)
+
+    success = _copy_table_element_to_header_part(
+        first_header_tbl_element,
+        source_part=doc.part,
+        header_part=header.part,
+    )
+    if not success:
+        return False
+
+    for section in sections[1:]:
+        section.header.is_linked_to_previous = True
+
+    _enable_field_updates(doc)
+    return True
+
+
+def _existing_true_header_present(doc: DocxDocument) -> bool:
+    return any(_story_has_visible_content(story) for story in _header_stories(doc))
+
+
+def _header_stories(doc: DocxDocument) -> list[Any]:
+    stories: list[Any] = []
+    use_even = bool(getattr(doc.settings, "odd_and_even_pages_header_footer", False))
+    for section in doc.sections:
+        stories.append(section.header)
+        if section.different_first_page_header_footer:
+            stories.append(section.first_page_header)
+        if use_even:
+            stories.append(section.even_page_header)
+    return stories
+
+
+def _make_header_record(
+    *,
+    document_name: str,
+    action: str,
+    source_location: str,
+    reasons: list[str],
+    applied: bool,
+    confidence: float = 1.0,
+) -> EmbeddedArtifactRecord:
+    return EmbeddedArtifactRecord(
+        document_name=document_name,
+        location="header:default",
+        block_type="header",
+        action=action,
+        confidence=confidence,
+        reasons=[*reasons, f"source:{source_location}"],
+        text="",
+        normalized_text="",
+        applied=applied,
+        candidate_id=_candidate_id(document_name, "header:default", action),
+    )
+
+
+def _header_reconstruction_record(
+    doc: DocxDocument,
+    candidates: list[_ArtifactCandidate],
+    *,
+    document_name: str,
+    config: dict[str, Any],
+    apply_changes: bool,
+) -> tuple[EmbeddedArtifactRecord | None, bool]:
+    if not bool(config.get("write_real_header", True)):
+        return None, False
+    if not bool(config.get("remove_header_table_artifacts", False)):
+        return None, False
+
+    source_candidate = next(
+        (
+            c
+            for c in candidates
+            if c.record.block_type == "header_table"
+            and c.record.action == "protected"
+            and c.table is not None
+        ),
+        None,
+    )
+    if source_candidate is None:
+        return None, False
+
+    removable = [
+        c
+        for c in candidates
+        if c.record.block_type == "header_table"
+        and c.record.action in {"remove_table", "would_remove_table"}
+    ]
+    if not removable:
+        return None, False
+
+    if _existing_true_header_present(doc) and not bool(config.get("overwrite_existing_header", False)):
+        return (
+            _make_header_record(
+                document_name=document_name,
+                action="header_protected_existing",
+                source_location=source_candidate.record.location,
+                reasons=["existing_true_header_detected", "overwrite_existing_header_disabled"],
+                applied=False,
+            ),
+            False,
+        )
+
+    action = "write_header" if apply_changes else "would_write_header"
+    applied = False
+    if apply_changes:
+        applied = _write_real_header(doc, source_candidate.table._tbl, config)
+        if not applied:
+            action = "header_write_failed"
+    return (
+        _make_header_record(
+            document_name=document_name,
+            action=action,
+            source_location=source_candidate.record.location,
+            reasons=["reconstructed_real_header", "table_with_image_copied"],
+            applied=applied,
+        ),
+        applied,
+    )
 
 
 def _alignment_name(paragraph: Paragraph) -> str:

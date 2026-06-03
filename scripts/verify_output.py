@@ -135,7 +135,7 @@ def _has_operator_certification_target_issue(
 ) -> bool:
     if not certified_target or not certified_patterns:
         return False
-    default_target = "personal designado por minera Spence"
+    default_target = "personal designado por Minera Spence"
     expanded_pattern = re.compile(
         rf"(?P<role>{OPERATOR_ROLE_RE.pattern})\s+o\s+{re.escape(default_target)}",
         re.IGNORECASE,
