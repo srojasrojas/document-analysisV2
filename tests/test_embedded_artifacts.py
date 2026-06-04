@@ -6,7 +6,9 @@ import zipfile
 from pathlib import Path
 
 from docx import Document
+from docx.oxml import OxmlElement
 
+from rule_engine import embedded_artifacts
 from rule_engine.embedded_artifacts import run_embedded_artifact_cleanup
 
 
@@ -61,7 +63,44 @@ def _add_embedded_header_table(doc: Document, code: str = "P-PRMI-OM-101") -> No
     table.cell(2, 1).text = "Revisó: Juan Pablo Ramos Coordinador Mina Aprobó: Rodrigo Puelles"
 
 
+def _make_tc(text: str):
+    tc = OxmlElement("w:tc")
+    paragraph = OxmlElement("w:p")
+    run = OxmlElement("w:r")
+    value = OxmlElement("w:t")
+    value.text = text
+    run.append(value)
+    paragraph.append(run)
+    tc.append(paragraph)
+    return tc
+
+
+class _BrokenRow:
+    def __init__(self, *texts: str) -> None:
+        self._tr = OxmlElement("w:tr")
+        for text in texts:
+            self._tr.append(_make_tc(text))
+
+    @property
+    def cells(self):
+        raise ValueError("no `tc` element at grid_offset=8")
+
+
+class _BrokenTable:
+    def __init__(self, *rows: _BrokenRow) -> None:
+        self.rows = list(rows)
+
+
 class EmbeddedArtifactCleanupTests(unittest.TestCase):
+    def test_table_text_falls_back_for_malformed_rows(self) -> None:
+        table = _BrokenTable(_BrokenRow("Código", "P-PRMI-OM-146"), _BrokenRow("Versión", "29"))
+
+        self.assertEqual("Código | P-PRMI-OM-146 | Versión | 29", embedded_artifacts._table_text(table))
+        self.assertEqual(
+            ["codigo", "p-prmi-om-146", "version", "29"],
+            embedded_artifacts._table_cell_norms(table),
+        )
+
     def test_removes_repeated_footer_paragraphs_and_writes_real_footer(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "sample.docx"

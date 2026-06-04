@@ -960,13 +960,32 @@ def _real_header_footer_texts(doc: DocxDocument) -> set[str]:
     return texts
 
 
+def _tc_text(tc: Any) -> str:
+    parts: list[str] = []
+    for child in tc.iterdescendants():
+        if child.tag == qn("w:tab"):
+            parts.append("\t")
+            continue
+        if child.tag in {qn("w:noBreakHyphen"), qn("w:softHyphen")}:
+            parts.append("-")
+            continue
+        if child.tag in {qn("w:t"), qn("w:delText"), qn("w:instrText")} and child.text:
+            parts.append(child.text)
+    return "".join(parts)
+
+
+def _row_cell_texts(row: Any) -> list[str]:
+    try:
+        values = [cell.text for cell in row.cells]
+    except ValueError:
+        values = [_tc_text(tc) for tc in row._tr.tc_lst]
+    return [text for text in (_compact(value) for value in values) if text]
+
+
 def _table_text(table: Table) -> str:
     parts: list[str] = []
     for row in table.rows:
-        for cell in row.cells:
-            text = _compact(cell.text)
-            if text:
-                parts.append(text)
+        parts.extend(_row_cell_texts(row))
     return " | ".join(parts)
 
 
@@ -977,8 +996,8 @@ def _table_signature(table: Table) -> str:
 def _table_cell_norms(table: Table) -> list[str]:
     values: list[str] = []
     for row in table.rows:
-        for cell in row.cells:
-            normalized = normalize_text(cell.text)
+        for text in _row_cell_texts(row):
+            normalized = normalize_text(text)
             if normalized:
                 values.append(normalized)
     return values
