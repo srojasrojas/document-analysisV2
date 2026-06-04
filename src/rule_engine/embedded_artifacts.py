@@ -522,7 +522,11 @@ def _apply_candidates(candidates: list[_ArtifactCandidate]) -> bool:
         changed = True
 
     for candidate in sorted(
-        (item for item in candidates if item.record.action == "remove_table" and item.table is not None),
+        (
+            item
+            for item in candidates
+            if item.record.action in {"remove_table", "move_to_header"} and item.table is not None
+        ),
         key=lambda item: item.table_index if item.table_index is not None else -1,
         reverse=True,
     ):
@@ -1328,6 +1332,16 @@ def _header_reconstruction_record(
         applied = _write_real_header(doc, source_candidate.table._tbl, config)
         if not applied:
             action = "header_write_failed"
+        else:
+            source_candidate.record.action = "move_to_header"
+            source_candidate.record.reasons = _unique(
+                [*source_candidate.record.reasons, "moved_to_real_header"]
+            )
+    else:
+        source_candidate.record.action = "would_move_to_header"
+        source_candidate.record.reasons = _unique(
+            [*source_candidate.record.reasons, "would_move_to_real_header"]
+        )
     return (
         _make_header_record(
             document_name=document_name,

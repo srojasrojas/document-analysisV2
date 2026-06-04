@@ -31,6 +31,36 @@ def _footer_table_text(doc: Document) -> str:
     return "\n".join(parts)
 
 
+def _story_table_texts(tables: list) -> list[str]:
+    values: list[str] = []
+    for table in tables:
+        parts: list[str] = []
+        for row in table.rows:
+            for cell in row.cells:
+                if cell.text.strip():
+                    parts.append(cell.text.strip())
+        values.append("\n".join(parts))
+    return values
+
+
+def _header_table_text(doc: Document) -> str:
+    return "\n".join(_story_table_texts(list(doc.sections[0].header.tables)))
+
+
+def _body_table_texts(doc: Document) -> list[str]:
+    return _story_table_texts(list(doc.tables))
+
+
+def _add_embedded_header_table(doc: Document, code: str = "P-PRMI-OM-101") -> None:
+    table = doc.add_table(rows=3, cols=2)
+    table.cell(0, 0).text = "Gerencia Producción Mina"
+    table.cell(0, 1).text = code
+    table.cell(1, 0).text = "Operación Camión de Extracción"
+    table.cell(1, 1).text = "Operación Camión de Extracción"
+    table.cell(2, 0).text = "Elaboró: Constanza Delgado Supervisor Mina"
+    table.cell(2, 1).text = "Revisó: Juan Pablo Ramos Coordinador Mina Aprobó: Rodrigo Puelles"
+
+
 class EmbeddedArtifactCleanupTests(unittest.TestCase):
     def test_removes_repeated_footer_paragraphs_and_writes_real_footer(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -203,6 +233,97 @@ class EmbeddedArtifactCleanupTests(unittest.TestCase):
             self.assertEqual(2, len(table_records))
             self.assertIn("protected", {record.action for record in table_records})
             self.assertIn("review", {record.action for record in table_records})
+
+    def test_repeated_embedded_header_tables_are_moved_to_real_header(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "sample.docx"
+            doc = Document()
+            for _ in range(3):
+                _add_embedded_header_table(doc)
+            doc.add_paragraph("El operador planta debe informar al supervisor de turno cualquier desviacion critica.")
+            doc.save(path)
+
+            records = run_embedded_artifact_cleanup(
+                path,
+                document_name="sample.docx",
+                config={"action": "remove", "enabled": True, "remove_header_table_artifacts": True},
+                dry_run=False,
+            )
+
+            cleaned = Document(str(path))
+            header_text = _header_table_text(cleaned)
+            body_header_tables = [text for text in _body_table_texts(cleaned) if "P-PRMI-OM-101" in text]
+
+            self.assertIn("P-PRMI-OM-101", header_text)
+            self.assertEqual([], body_header_tables)
+            self.assertEqual(1, sum(1 for record in records if record.action == "write_header" and record.applied))
+            self.assertEqual(1, sum(1 for record in records if record.action == "move_to_header" and record.applied))
+            self.assertEqual(2, sum(1 for record in records if record.action == "remove_table" and record.applied))
+
+    def test_existing_header_protects_embedded_header_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "sample.docx"
+            doc = Document()
+            doc.sections[0].header.paragraphs[0].text = "Encabezado real existente"
+            for _ in range(3):
+                _add_embedded_header_table(doc)
+            doc.save(path)
+
+            records = run_embedded_artifact_cleanup(
+                path,
+                document_name="sample.docx",
+                config={"action": "remove", "enabled": True, "remove_header_table_artifacts": True},
+                dry_run=False,
+            )
+            cleaned = Document(str(path))
+
+            self.assertIn("Encabezado real existente", cleaned.sections[0].header.paragraphs[0].text)
+            self.assertEqual(1, sum(1 for record in records if record.action == "header_protected_existing"))
+            self.assertEqual(0, sum(1 for record in records if record.action == "write_header"))
+            self.assertEqual(0, sum(1 for record in records if record.action == "move_to_header"))
+            self.assertEqual(1, sum(1 for text in _body_table_texts(cleaned) if "P-PRMI-OM-101" in text))
+
+    def test_single_embedded_header_table_stays_protected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "sample.docx"
+            doc = Document()
+            _add_embedded_header_table(doc)
+            doc.save(path)
+
+            records = run_embedded_artifact_cleanup(
+                path,
+                document_name="sample.docx",
+                config={"action": "remove", "enabled": True, "remove_header_table_artifacts": True},
+                dry_run=False,
+            )
+            cleaned = Document(str(path))
+
+            self.assertEqual(
+                1,
+                sum(
+                    1
+                    for record in records
+                    if record.block_type == "header_table" and record.action == "protected"
+                ),
+            )
+            self.assertEqual(0, sum(1 for record in records if record.action in {"write_header", "move_to_header"}))
+            self.assertEqual(1, sum(1 for text in _body_table_texts(cleaned) if "P-PRMI-OM-101" in text))
+
+    def test_header_cleanup_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "sample.docx"
+            doc = Document()
+            for _ in range(3):
+                _add_embedded_header_table(doc)
+            doc.save(path)
+
+            config = {"action": "remove", "enabled": True, "remove_header_table_artifacts": True}
+            run_embedded_artifact_cleanup(path, document_name="sample.docx", config=config, dry_run=False)
+            second = run_embedded_artifact_cleanup(path, document_name="sample.docx", config=config, dry_run=False)
+
+            self.assertEqual(0, sum(1 for record in second if record.action == "write_header"))
+            self.assertEqual(0, sum(1 for record in second if record.action == "move_to_header"))
+            self.assertEqual(0, sum(1 for record in second if record.action == "remove_table"))
 
 
 if __name__ == "__main__":

@@ -301,10 +301,25 @@ def run_document(
             dry_run=dry_run,
         )
         applied_count = sum(1 for record in cleanup_records if record.applied)
+        cleanup_actionable_actions = {
+            "remove",
+            "clear_text",
+            "exclude",
+            "remove_table",
+            "move_to_header",
+            "write_header",
+            "write_footer",
+            "would_remove",
+            "would_clear_text",
+            "would_remove_table",
+            "would_move_to_header",
+            "would_write_header",
+            "would_write_footer",
+        }
         actionable_count = sum(
             1
             for record in cleanup_records
-            if record.action in {"remove", "clear_text", "exclude", "would_remove", "would_clear_text"}
+            if record.action in cleanup_actionable_actions
         )
         print(
             f"[embedded-cleanup] {input_path.name}: candidates={len(cleanup_records)} "
