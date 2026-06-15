@@ -17,10 +17,14 @@ OPERATOR_ROLE_RE = re.compile(
     r"(?:\s+(?!o\b)[A-Za-zÁÉÍÓÚÑáéíóúñ&/().-]+){0,8}",
     re.IGNORECASE,
 )
+_TARGET_ALTERNATION = (
+    r"personal\s+(?:calificado\s+designado|certificado\s+designado|designado)\s+por\s+minera\s+Spence"
+    r"|personal\s+calificado(?!\s+designado\b)"
+)
 SPLIT_COMPOUND_DESCRIPTOR_RE = re.compile(
     r"\boperador(?:\s*/\s*a|\s*\([aA]\)|a|es|as)?"
     r"(?:\s+(?:de|del)\s+(?:(?:el|la|los|las)\s+)?)?cami[oó]n(?:es)?\s+o\s+"
-    r"(?P<target>personal\s+(?:certificado\s+designado|designado)\s+por\s+minera\s+Spence|personal\s+calificado)"
+    r"(?P<target>" + _TARGET_ALTERNATION + r")"
     r"\s+(?:tolva|pluma)\b",
     re.IGNORECASE,
 )
@@ -32,7 +36,7 @@ SUPERVISOR_LEGACY_RE = re.compile(
 OPERATOR_TABLE_RESIDUAL_RE = re.compile(
     r"\boperador(?:\s*/\s*a|\s*\([aA]\)|a|es|as)?(?:\s+a\s+cargo)?"
     r"(?:\s+(?!o\b)[A-Za-zÁÉÍÓÚÑáéíóúñ0-9&/().-]+){0,10}\s+o\s+"
-    r"(?P<target>personal\s+(?:certificado\s+designado|designado)\s+por\s+minera\s+Spence|personal\s+calificado)"
+    r"(?P<target>" + _TARGET_ALTERNATION + r")"
     r"\s+(?P<residual>Spence\b|(?:de\s+)?(?:EW|MLDC|MDC|SX|TF)\b(?:\s+Spence)?|"
     r"de\s+c[aá]todos\b|(?:de\s+)?otras\s+[aá]reas\b|(?:de\s+la\s+)?m[aá]quina\s+despegadora\b|"
     r"(?:de\s+)?embarque\b|(?:de\s+(?:el|la|los|las)\s+|de\s+|del\s+)?puentes?\s+gr[uú]as?\b|"
@@ -87,7 +91,8 @@ def _certified_operator_patterns(config: dict) -> tuple[str, list[re.Pattern[str
     rule = _operator_rule(config)
     for target in rule.get("replacement", {}).get("conditional_targets", []):
         target_phrase = str(target.get("target_phrase", ""))
-        if "certificado designado" not in normalize_text(target_phrase):
+        normalized = normalize_text(target_phrase)
+        if "certificado designado" not in normalized and "calificado designado" not in normalized:
             continue
         patterns = [
             re.compile(str(pattern), re.IGNORECASE)
@@ -108,18 +113,29 @@ def _has_suspicious_duplicate(text: str, target: str) -> bool:
     return bool(re.search(r"\bo\s+o\s+", text, re.IGNORECASE))
 
 
+def _target_with_continuation_guard(target: str, targets: list[str]) -> str:
+    """Escapa el target e impide que matchee como prefijo de un target mas largo."""
+    suffixes = [
+        re.escape(other[len(target) :].strip())
+        for other in targets
+        if other != target and normalize_text(other).startswith(normalize_text(target))
+    ]
+    guard = rf"(?!\s+(?:{'|'.join(suffixes)})\b)" if suffixes else ""
+    return re.escape(target) + guard
+
+
 def _has_operator_descriptor_order_issue(
     text: str, targets: list[str], descriptor_patterns: list[re.Pattern[str]]
 ) -> bool:
+    if SPLIT_COMPOUND_DESCRIPTOR_RE.search(text):
+        return True
     for target in targets:
         if "personal" not in normalize_text(target):
             continue
-        if SPLIT_COMPOUND_DESCRIPTOR_RE.search(text):
-            return True
         for descriptor_pattern in descriptor_patterns:
             pattern = re.compile(
                 r"\boperador(?:\s*/\s*a|\s*\([aA]\)|a|es|as)?\s+o\s+"
-                + re.escape(target)
+                + _target_with_continuation_guard(target, targets)
                 + r"\s+(?:"
                 + descriptor_pattern.pattern
                 + r")",

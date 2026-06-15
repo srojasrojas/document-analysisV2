@@ -62,6 +62,8 @@ class GuardConfig:
     required_context_window_chars: int
     target_after_match_window_chars: int
     descriptor_order_repair_patterns: tuple[str, ...]
+    descriptor_order_role_pattern: str | None
+    descriptor_repair_allow_glued: bool
     excluded_section_patterns: tuple[str, ...]
 
 
@@ -134,6 +136,8 @@ class ReplacementRule:
             descriptor_order_repair_patterns=tuple(
                 str(pattern) for pattern in guards_cfg.get("descriptor_order_repair_patterns", [])
             ),
+            descriptor_order_role_pattern=guards_cfg.get("descriptor_order_role_pattern"),
+            descriptor_repair_allow_glued=bool(guards_cfg.get("descriptor_repair_allow_glued", False)),
             excluded_section_patterns=tuple(
                 str(pattern) for pattern in guards_cfg.get("excluded_section_patterns", [])
             ),
@@ -183,7 +187,13 @@ class ReplacementRule:
                 + list(self.replacement.upgradeable_target_phrases)
             )
         )
-        target_pattern = "|".join(re.escape(target) for target in self.all_target_phrases)
+        # Mas largo primero: "personal calificado" es prefijo de "personal
+        # calificado designado por Minera Spence" y la alternacion no debe
+        # quedarse con el target corto dejando colgando el resto de la frase.
+        target_pattern = "|".join(
+            re.escape(target) for target in sorted(self.all_target_phrases, key=len, reverse=True)
+        )
+        self._target_mask_pattern = re.compile(r"(?:" + target_pattern + r")", re.IGNORECASE) if target_pattern else None
         self._target_after_match_pattern = re.compile(
             r"^\s*(?:" + re.escape(self.replacement.connector) + r"|/|y/o)\s+(?:el\s+)?"
             + r"(?:" + target_pattern + r")",
@@ -206,14 +216,21 @@ class ReplacementRule:
             + operator_descriptor_stopwords
             + r")[A-Za-zÁÉÍÓÚÑáéíóúñ0-9&/().-]+){0,10}?"
         )
+        role_pattern = self.guards.descriptor_order_role_pattern or operator_pattern
+        # Los splits legados pueden quedar pegados al target sin espacio
+        # ("...del ÁreaEjecución procesos"); el separador laxo solo se activa
+        # por configuración para no relajar la regla de operador.
+        descriptor_separator = r"\s*" if self.guards.descriptor_repair_allow_glued else r"\s+"
         self._target_before_descriptor_pattern = (
             re.compile(
-                r"(?P<operator>" + operator_pattern + r")"
+                r"(?P<operator>" + role_pattern + r")"
                 r"\s+"
                 + re.escape(self.replacement.connector)
                 + r"\s+(?P<target>"
                 + target_pattern
-                + r")\s+(?P<descriptor>"
+                + r")"
+                + descriptor_separator
+                + r"(?P<descriptor>"
                 + descriptor_pattern
                 + r")",
                 re.IGNORECASE,
@@ -292,19 +309,29 @@ class ReplacementRule:
     def _select_target(self, full_text: str, match: re.Match[str]) -> tuple[str, str, str]:
         return self._select_target_for_text(full_text, match.group(0), match.start(), match.end())
 
+    def _mask_known_targets(self, text: str) -> str:
+        if self._target_mask_pattern is None:
+            return text
+        return self._target_mask_pattern.sub(" ", text)
+
     def _select_target_for_text(
         self, full_text: str, match_text: str, start_index: int, end_index: int
     ) -> tuple[str, str, str]:
-        for target, context_patterns, match_patterns in self.conditional_target_patterns:
+        # Primero los patrones sobre el match (mas especificos: el propio
+        # cargo nombra el equipo); recien despues los patrones de contexto.
+        for target, _context_patterns, match_patterns in self.conditional_target_patterns:
             if any(pattern.search(match_text) for pattern in match_patterns):
                 context = self._context_excerpt_for_span(
                     full_text, start_index, end_index, target.context_window_chars
                 )
                 return target.target_phrase, target.reason, context
+        for target, context_patterns, _match_patterns in self.conditional_target_patterns:
             context = self._context_excerpt_for_span(
                 full_text, start_index, end_index, target.context_window_chars
             )
-            if any(pattern.search(context) for pattern in context_patterns):
+            # Los targets ya insertados no deben retroalimentar la seleccion
+            # ("calificado" dentro de "personal calificado designado por...").
+            if any(pattern.search(self._mask_known_targets(context)) for pattern in context_patterns):
                 return target.target_phrase, target.reason, context
         context = self._context_excerpt_for_span(
             full_text, start_index, end_index, self.guards.required_context_window_chars
@@ -326,7 +353,23 @@ class ReplacementRule:
                 if target_match is None:
                     continue
                 current_target = target_match.group("target")
-                if normalize_text(current_target) == normalize_text(selected_target):
+                current_norm = normalize_text(current_target)
+                selected_norm = normalize_text(selected_target)
+                # Nunca degradar: si el target escrito ya contiene al
+                # seleccionado ("personal calificado designado por..." vs
+                # "personal calificado"), se considera al menos igual de
+                # especifico y no se toca.
+                if current_norm == selected_norm or selected_norm in current_norm:
+                    break
+                # Tampoco degradar a la frase por defecto un target valido ya
+                # escrito: insertar el target desplaza el contexto fuera de la
+                # ventana y la seleccion por defecto en re-corridas no es
+                # evidencia de error. Los legados (p.ej. "experto tecnico") no
+                # estan en upgradeable y si se reparan.
+                if selected_norm == normalize_text(self.replacement.target_phrase) and any(
+                    normalize_text(upgradeable) == current_norm
+                    for upgradeable in self.replacement.upgradeable_target_phrases
+                ):
                     break
                 start = match.end() + target_match.start("target")
                 end = match.end() + target_match.end("target")
@@ -378,6 +421,13 @@ class ReplacementRule:
         repaired_contexts: list[str] = []
 
         def repair(match: re.Match[str]) -> str:
+            # El backtracking puede cortar un target largo en uno corto y
+            # tratar el resto como descriptor ("personal calificado" +
+            # "designado por..."); si target+descriptor reconstruye el inicio
+            # de un target conocido, no hay descriptor fuera de lugar.
+            combined = normalize_text(f"{match.group('target')} {match.group('descriptor')}")
+            if any(normalize_text(target).startswith(combined) for target in self.all_target_phrases):
+                return match.group(0)
             role_text = f"{match.group('operator')} {match.group('descriptor')}"
             selected_target, selector_reason, context_excerpt = self._select_target_for_text(
                 text, role_text, match.start(), match.end()
@@ -482,8 +532,11 @@ class ReplacementRule:
             )
 
         text_norm = normalize_text(text)
-        if target_repair_count == 0 and self.guards.skip_if_target_exists_in_paragraph and any(
-            normalize_text(target) in text_norm for target in self.all_target_phrases
+        if (
+            target_repair_count == 0
+            and repaired_count == 0
+            and self.guards.skip_if_target_exists_in_paragraph
+            and any(normalize_text(target) in text_norm for target in self.all_target_phrases)
         ):
             return RuleDecision(
                 self.id,
@@ -494,19 +547,25 @@ class ReplacementRule:
                 candidates=len(matches),
                 already_expanded=1,
             )
-        if target_repair_count and self.guards.skip_if_target_exists_in_paragraph:
+        if (target_repair_count or repaired_count) and self.guards.skip_if_target_exists_in_paragraph:
+            reason_parts = []
+            if repaired_count:
+                reason_parts.append(f"repaired {repaired_count} descriptor order issue(s)")
+            if target_repair_count:
+                reason_parts.append(f"updated {target_repair_count} target phrase(s)")
+            unique_targets = list(dict.fromkeys(target_repair_targets + repaired_targets))
             return RuleDecision(
                 self.id,
                 True,
                 original_text,
                 text,
-                f"updated {target_repair_count} target phrase(s)",
+                "; ".join(reason_parts),
                 candidates=len(list(self.pattern.finditer(text))),
                 already_expanded=1,
-                match_text=" | ".join(target_repair_match_texts[:5]),
-                selected_target=" | ".join(dict.fromkeys(target_repair_targets)),
-                selector_reason=" | ".join(dict.fromkeys(target_repair_reasons)),
-                context_excerpt=" | ".join(target_repair_contexts[:3]),
+                match_text=" | ".join((repaired_match_texts + target_repair_match_texts)[:5]),
+                selected_target=" | ".join(unique_targets),
+                selector_reason=" | ".join(dict.fromkeys(repaired_reasons + target_repair_reasons)),
+                context_excerpt=" | ".join((repaired_contexts + target_repair_contexts)[:3]),
             )
 
         candidates = 0

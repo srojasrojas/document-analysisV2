@@ -6,7 +6,7 @@ from pathlib import Path
 
 import xlsxwriter
 
-from .models import ChangeRecord, EmbeddedArtifactRecord, SkipRecord
+from .models import ChangeRecord, EmbeddedArtifactRecord, FormatNormalizationRecord, SkipRecord
 
 
 def append_changes_jsonl(changes: list[ChangeRecord], path: Path) -> None:
@@ -116,6 +116,55 @@ def write_embedded_artifact_report(
     candidates_sheet.set_column(0, 12, 24)
     candidates_sheet.set_column(13, 15, 72)
     candidates_sheet.set_column(16, 17, 24)
+    workbook.close()
+
+
+def write_format_normalization_report(
+    records: list[FormatNormalizationRecord],
+    excel_path: Path,
+    jsonl_path: Path | None = None,
+) -> None:
+    if jsonl_path is not None:
+        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        with jsonl_path.open("w", encoding="utf-8") as handle:
+            for record in records:
+                handle.write(json.dumps(record.to_dict(), ensure_ascii=False))
+                handle.write("\n")
+
+    excel_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = xlsxwriter.Workbook(str(excel_path))
+    summary_sheet = workbook.add_worksheet("Resumen")
+    detail_sheet = workbook.add_worksheet("Acciones")
+    header_format = workbook.add_format({"bold": True, "bg_color": "#D9EAF7"})
+    wrap_format = workbook.add_format({"text_wrap": True, "valign": "top"})
+
+    by_action: Counter[str] = Counter()
+    by_document: Counter[str] = Counter()
+    for record in records:
+        by_action[record.action] += record.count
+        by_document[record.document_name] += record.count
+    summary_sheet.write(0, 0, "Action", header_format)
+    summary_sheet.write(0, 1, "Total", header_format)
+    for row_index, (action, count) in enumerate(by_action.most_common(), start=1):
+        summary_sheet.write(row_index, 0, action)
+        summary_sheet.write(row_index, 1, count)
+    summary_sheet.write(0, 3, "Document", header_format)
+    summary_sheet.write(0, 4, "Total", header_format)
+    for row_index, (document_name, count) in enumerate(by_document.most_common(), start=1):
+        summary_sheet.write(row_index, 3, document_name)
+        summary_sheet.write(row_index, 4, count)
+    summary_sheet.set_column(0, 4, 36)
+
+    headers = ["document_name", "action", "count", "applied", "detected_at"]
+    for column, header in enumerate(headers):
+        detail_sheet.write(0, column, header, header_format)
+    sorted_records = sorted(records, key=lambda item: (item.document_name, item.action))
+    for row_index, record in enumerate(sorted_records, start=1):
+        row = record.to_dict()
+        for column, header in enumerate(headers):
+            detail_sheet.write(row_index, column, row.get(header, ""), wrap_format)
+    detail_sheet.set_column(0, 0, 48)
+    detail_sheet.set_column(1, 4, 28)
     workbook.close()
 
 

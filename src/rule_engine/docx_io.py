@@ -205,10 +205,26 @@ def collect_elements(doc: DocxDocument) -> list[DocxElement]:
     return elements
 
 
+# Compensaciones de metricas que los conversores PDF dejan por run; heredarlas
+# en texto insertado hace que se vea "otra fuente" aunque el nombre coincida.
+_TRACKING_TAGS = (qn("w:spacing"), qn("w:kern"), qn("w:position"), qn("w:w"))
+
+
+def _strip_run_tracking(run) -> None:
+    rpr = run._element.find(qn("w:rPr"))
+    if rpr is None:
+        return
+    for tag in _TRACKING_TAGS:
+        element = rpr.find(tag)
+        if element is not None:
+            rpr.remove(element)
+
+
 def _fallback_replace(paragraph: Paragraph, new_text: str) -> None:
     if paragraph.runs:
         paragraph.runs[0].text = new_text
         paragraph.runs[0].font.highlight_color = WD_COLOR_INDEX.TURQUOISE
+        _strip_run_tracking(paragraph.runs[0])
         for run in paragraph.runs[1:]:
             run.text = ""
             run.font.highlight_color = WD_COLOR_INDEX.TURQUOISE
@@ -280,6 +296,7 @@ def apply_surgical_change(element: DocxElement, new_text: str) -> None:
 
     first_run.text = prefix + replacement + suffix
     first_run.font.highlight_color = WD_COLOR_INDEX.TURQUOISE
+    _strip_run_tracking(first_run)
     for index in affected[1:]:
         paragraph.runs[index].text = ""
         paragraph.runs[index].font.highlight_color = WD_COLOR_INDEX.TURQUOISE

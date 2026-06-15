@@ -16,6 +16,8 @@ forma local con `config.local.yaml` sin tocar el repo:
 - `rules`: detectores, frase objetivo, formato de reemplazo, guardas y prompts.
 - `pipeline.max_passes`: numero maximo de pasadas.
 - `pipeline.use_llm_refine`: en esta rama queda en `false`.
+- `pipeline.format_normalization`: etapa cero de mejora de formato para
+    conversiones PDF a DOCX de mala calidad (ver seccion mas abajo).
 - `pipeline.embedded_header_footer_cleanup`: pre-limpieza de encabezados y pies
     falsos incrustados en el cuerpo por conversiones PDF a DOCX.
 - `paths.input_dir`: por defecto apunta a `inputs/` para documentos editables
@@ -71,6 +73,39 @@ Correr sobre una carpeta de documentos:
 
 ```powershell
 venv\Scripts\python.exe -m rule_engine.pipeline --config config.yaml --input tmp\run_b25 --output tmp\run_b25_no_llm_reviewed --passes 3 --force --simple-only
+```
+
+## Etapa cero: normalizacion de formato
+
+Antes de cualquier otra capa, el pipeline ejecuta una normalizacion de formato
+pensada para conversiones PDF a DOCX de mala calidad
+(`pipeline.format_normalization`, modulo `rule_engine/format_normalization.py`):
+
+- `merge_compatible_runs`: fusiona runs fragmentados caracter a caracter con
+    formato identico.
+- `strip_pdf_spacing_artifacts`: elimina compensaciones de metricas del
+    conversor (`w:spacing`, `w:kern`, `w:position`, `w:w` cercano a 100). Estos
+    artefactos hacian que las expansiones se vieran "con otra fuente" aunque el
+    nombre de la fuente coincidiera.
+- `normalize_fonts`: homologa todos los runs a la fuente dominante del
+    documento (o `target_font` si se configura), preservando fuentes de
+    simbolos/vinetas, y actualiza la fuente por defecto del documento.
+- `collapse_empty_paragraphs`: colapsa rachas de parrafos vacios usados como
+    espaciado vertical (conserva saltos de pagina, secciones e imagenes).
+- `flatten_nested_tables`: elimina anidamientos de tablas mas alla de
+    `max_table_depth`, conservando el texto en la celda contenedora.
+- `inline_floating_images`: convierte a inline las imagenes ancladas grandes y
+    aisladas; las decoraciones pequenas posicionadas de forma absoluta se dejan
+    intactas.
+
+Para compararla o desactivarla por corrida usa `--skip-format-normalization`.
+La auditoria queda en `reports/format_normalization.xlsx` y `.jsonl`.
+
+La etapa tambien existe como opcion standalone (sobre copias, sin tocar el
+original): `scripts/normalize_format.py`.
+
+```powershell
+venv\Scripts\python.exe scripts\normalize_format.py --input tmp\run_b25 --output-dir tmp\run_b25_normalizado --report reports\format_normalization_standalone.xlsx
 ```
 
 El pipeline ejecuta antes de las reglas una limpieza de pies/encabezados falsos
@@ -148,18 +183,28 @@ Cada entrada de `rules` contiene:
 - `guards`: excepciones, alternativas ya existentes y textos solo para revision.
 - `llm_refining`: prompts especificos y validaciones opcionales por regla.
 
-La regla de operador usa tres destinos, en este orden de prioridad:
+La regla de operador usa tres destinos. La especificacion de equipo en el
+propio cargo tiene prioridad sobre las pistas de contexto, y los targets ya
+insertados se enmascaran antes de evaluar el contexto para no retroalimentar la
+seleccion:
 
+- Usa `o personal calificado designado por Minera Spence` cuando el cargo de
+    operador incluye una especificacion de equipo certificado o pesado, como
+    retroexcavadora, excavadora, minicargador, cargador frontal, camion tolva,
+    camion pluma, rotopala, apilador, esparcidor, picaroca, puente grua o grua
+    horquilla. El legado `personal certificado designado por minera Spence` se
+    homologa automaticamente a esta frase.
 - Usa `o personal calificado` cuando el contexto menciona personal autorizado,
     capacitado, habilitado, bloqueo/LOTO, energizacion, HMI, panel de control,
     reset, instrumentacion, mantencion, calibracion o diagnostico tecnico.
-- Usa `o personal certificado designado por minera Spence` cuando el cargo de
-    operador incluye una especificacion de equipo certificado o pesado, como
-    retroexcavadora, excavadora, minicargador, cargador frontal, camion tolva,
-    camion pluma, rotopala, apilador, esparcidor, picaroca, puente grua, grua
-    horquilla u operador de equipos.
 - Por defecto agrega `o personal designado por minera Spence` para operador de
     proceso, planta, area o responsabilidades operacionales generales.
+
+La deteccion de operador encadena hasta tres descriptores con preposiciones
+`de/del/en` (`Operador en Terreno Zona Autonoma`, `Operador de vehiculos
+tripulados en zona autonoma`) para no insertar el target en medio del cargo, y
+el contexto de accion requerido reconoce verbos en futuro (`realizara`,
+`verificara`, `hara`) y construcciones como `es responsable de`.
 
 La deteccion de operador tambien cubre descriptores compuestos frecuentes en
 tablas, como `Operador Spence`, `Operador EW`, `Operador MLDC`, `Operador de
@@ -167,7 +212,12 @@ Patio embarque`, `operador de patio de catodos`, `operadores de otras areas` y
 `Operador de la maquina despegadora`, para evitar residuos despues del target.
 
 La regla de supervisor repara el legado `o experto tecnico` y lo homologa a
-`o Ejecutivos del Área`.
+`o Ejecutivos del Área`. Ademas consume el "apellido" completo del cargo antes
+de insertar el target (`Supervisor de desarrollo o Ejecutivos del Área`, no
+`Supervisor o Ejecutivos del Área de desarrollo`), repara splits legados de
+corridas anteriores (incluido el caso pegado `...del ÁreaEjecución procesos`)
+y exime a supervisores de empresas contratistas/colaboradoras (EECC), que no
+deben modificarse.
 
 Las menciones bajo secciones `REGISTRO` o `REGISTROS` se omiten y quedan en el
 registro como `skip_section`. Tambien se omiten contextos CAS/CIO/Sala de
@@ -206,6 +256,9 @@ repo vecino. Para usar OpenAI directo en otra rama, cambia `llm_refine.model` a
     falsos detectados, acciones propuestas/aplicadas y candidatos en revision.
 - `reports/embedded_header_footer_cleanup.jsonl`: misma auditoria en formato
     estructurado.
+- `reports/format_normalization.xlsx`: auditoria de la etapa cero de
+    normalizacion de formato (acciones por documento).
+- `reports/format_normalization.jsonl`: misma auditoria en formato estructurado.
 - `reports/referencia_resumen.md`: resumen del Excel manual.
 
 La corrida puede repetirse sobre el mismo output. Si el documento ya esta

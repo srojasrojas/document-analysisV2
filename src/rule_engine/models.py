@@ -97,6 +97,18 @@ class EmbeddedArtifactRecord:
 
 
 @dataclass
+class FormatNormalizationRecord:
+    document_name: str
+    action: str
+    count: int
+    applied: bool = False
+    detected_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class PassSummary:
     pass_index: int
     candidates: int = 0

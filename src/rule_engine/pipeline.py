@@ -10,18 +10,33 @@ from pathlib import Path
 from .config import load_config, load_env_file, project_root_from_config, resolve_path
 from .docx_io import apply_surgical_change, collect_elements, load_docx, normalize_text, save_docx
 from .embedded_artifacts import excluded_locations, run_embedded_artifact_cleanup
+from .format_normalization import run_format_normalization
 from .llm_refine import LlmRefiner
-from .models import ChangeRecord, EmbeddedArtifactRecord, PassSummary, SkipRecord
-from .reporting import append_changes_jsonl, write_audit_report, write_embedded_artifact_report, write_registry
+from .models import ChangeRecord, EmbeddedArtifactRecord, FormatNormalizationRecord, PassSummary, SkipRecord
+from .reporting import (
+    append_changes_jsonl,
+    write_audit_report,
+    write_embedded_artifact_report,
+    write_format_normalization_report,
+    write_registry,
+)
 from .rules import ReplacementRule, load_rules
 
 
 ACTION_VERB_RE = re.compile(
-    r"\b(?:debe(?:n)?|deber[aá]n?|deber[aá]|realiza(?:r|n)?|revisa(?:r|n)?|verifica(?:r|n)?|"
-    r"detiene(?:r|n)?|opera(?:r|n)?|inspecciona(?:r|n)?|coordina(?:r|n)?|informa(?:r|n)?|"
-    r"avisa(?:r|n)?|solicita(?:r|n)?|autoriza(?:r|n)?|registra(?:r|n)?|bloquea(?:r|n)?|"
-    r"desbloquea(?:r|n)?|energiza(?:r|n)?|desenergiza(?:r|n)?|comunica(?:r|n)?|"
-    r"asegura(?:r|n)?|conozca(?:n)?|da\s+aviso|dar[aá]?\s+aviso|dando\s+aviso)\b",
+    r"\b(?:debe(?:n|r[aá]n?)?|realiza(?:r[aá]n?|r|n|ndo)?|revisa(?:r[aá]n?|r|n|ndo)?|"
+    r"verifica(?:r[aá]n?|r|n|ndo)?|detiene(?:n)?|detendr[aá]n?|opera(?:r[aá]n?|r|n|ndo)?|"
+    r"inspecciona(?:r[aá]n?|r|n|ndo)?|coordina(?:r[aá]n?|r|n|ndo)?|informa(?:r[aá]n?|r|n|ndo)?|"
+    r"avisa(?:r[aá]n?|r|n|ndo)?|solicita(?:r[aá]n?|r|n|ndo)?|autoriza(?:r[aá]n?|r|n|ndo)?|"
+    r"registra(?:r[aá]n?|r|n|ndo)?|bloquea(?:r[aá]n?|r|n|ndo)?|desbloquea(?:r[aá]n?|r|n|ndo)?|"
+    r"energiza(?:r[aá]n?|r|n|ndo)?|desenergiza(?:r[aá]n?|r|n|ndo)?|comunica(?:r[aá]n?|r|n|ndo)?|"
+    r"asegura(?:r[aá]n?|r|n|ndo)?|conozca(?:n)?|hace(?:n|r)?|har[aá]n?|procede(?:n|r)?|"
+    r"proceder[aá]n?|coloca(?:r[aá]n?|r|n|ndo)?|pesa(?:r[aá]n?|r|n|ndo)?|"
+    r"entrega(?:r[aá]n?|r|n|ndo)?|instala(?:r[aá]n?|r|n|ndo)?|retira(?:r[aá]n?|r|n|ndo)?|"
+    r"posiciona(?:r[aá]n?|r|n|ndo)?|ubica(?:r[aá]n?|r|n|ndo)?|"
+    r"conduce(?:n)?|conducir[aá]n?|traslada(?:r[aá]n?|r|n|ndo)?|"
+    r"es\s+(?:el\s+)?responsable|son\s+(?:los\s+)?responsables|encargad[oa]s?\s+de|"
+    r"da\s+aviso|dar[aá]?\s+aviso|dando\s+aviso)\b",
     re.IGNORECASE,
 )
 REPAIRABLE_QA_FLAGS = {
@@ -46,6 +61,18 @@ def parse_args() -> argparse.Namespace:
         "--skip-embedded-cleanup",
         action="store_true",
         help="Disable configured cleanup of body-embedded headers and footers",
+    )
+    parser.add_argument(
+        "--skip-format-normalization",
+        action="store_true",
+        help="Disable the stage-zero format normalization of PDF conversion artifacts",
+    )
+    parser.add_argument(
+        "--snapshot-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Save a DOCX copy after each pipeline stage into DIR (format_norm, embedded_cleanup, rule_pass_N)",
     )
     return parser.parse_args()
 
@@ -280,7 +307,15 @@ def run_document(
     dry_run: bool,
     simple_only: bool,
     force: bool,
-) -> tuple[Path, list[ChangeRecord], list[SkipRecord], list[PassSummary], list[EmbeddedArtifactRecord]]:
+    snapshot_dir: Path | None = None,
+) -> tuple[
+    Path,
+    list[ChangeRecord],
+    list[SkipRecord],
+    list[PassSummary],
+    list[EmbeddedArtifactRecord],
+    list[FormatNormalizationRecord],
+]:
     rules = load_rules(config)
     if not rules:
         raise ValueError("No replacement rules configured")
@@ -290,8 +325,35 @@ def run_document(
     all_skips: list[SkipRecord] = []
     summaries: list[PassSummary] = []
     cleanup_records: list[EmbeddedArtifactRecord] = []
+    normalization_records: list[FormatNormalizationRecord] = []
+
+    def _snap(stage_name: str) -> None:
+        if snapshot_dir is None or dry_run:
+            return
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        dest = snapshot_dir / f"{stage_name}.docx"
+        shutil.copy2(working_path, dest)
+        print(f"[snapshot] {dest.name}", file=sys.stderr)
+
+    _snap("00_original")
 
     skip_heading_styles = bool(config.get("pipeline", {}).get("skip_heading_styles", True))
+    normalization_cfg = config.get("pipeline", {}).get("format_normalization", {})
+    if bool(normalization_cfg.get("enabled", False)) and bool(normalization_cfg.get("apply_before_rules", True)):
+        normalization_records = run_format_normalization(
+            working_path,
+            document_name=input_path.name,
+            config=normalization_cfg,
+            dry_run=dry_run,
+        )
+        total_actions = sum(record.count for record in normalization_records)
+        print(
+            f"[format-normalization] {input_path.name}: actions={total_actions} "
+            f"({', '.join(f'{record.action}={record.count}' for record in normalization_records if record.count)})",
+            file=sys.stderr,
+        )
+        _snap("01_after_format_normalization")
+
     cleanup_cfg = config.get("pipeline", {}).get("embedded_header_footer_cleanup", {})
     if bool(cleanup_cfg.get("enabled", False)) and bool(cleanup_cfg.get("apply_before_rules", True)):
         cleanup_records = run_embedded_artifact_cleanup(
@@ -326,6 +388,7 @@ def run_document(
             f"actionable={actionable_count} applied={applied_count}",
             file=sys.stderr,
         )
+        _snap("02_after_embedded_cleanup")
 
     cleanup_excluded_locations = excluded_locations(cleanup_records)
     use_llm = bool(config.get("pipeline", {}).get("use_llm_refine", False)) and not simple_only
@@ -369,10 +432,11 @@ def run_document(
             f"already_expanded={summary.already_expanded} llm={summary.llm_changed}/{summary.llm_attempted}",
             file=sys.stderr,
         )
+        _snap(f"0{2 + pass_index}_after_rule_pass_{pass_index}")
         if summary.changed == 0:
             break
 
-    return working_path, all_changes, all_skips, summaries, cleanup_records
+    return working_path, all_changes, all_skips, summaries, cleanup_records, normalization_records
 
 
 def _configured_targets(config: dict) -> list[str]:
@@ -537,6 +601,8 @@ def main() -> int:
     pipeline_cfg = config.get("pipeline", {})
     if args.skip_embedded_cleanup:
         config.setdefault("pipeline", {}).setdefault("embedded_header_footer_cleanup", {})["enabled"] = False
+    if args.skip_format_normalization:
+        config.setdefault("pipeline", {}).setdefault("format_normalization", {})["enabled"] = False
 
     input_path = args.input or resolve_path(project_root, paths_cfg.get("input_dir", "data/input"))
     if not input_path.is_absolute():
@@ -544,7 +610,7 @@ def main() -> int:
     output_dir = args.output or resolve_path(project_root, paths_cfg.get("output_dir", "data/output"))
     if not output_dir.is_absolute():
         output_dir = project_root / output_dir
-    max_passes = args.passes or int(pipeline_cfg.get("max_passes", 3))
+    max_passes = args.passes if args.passes is not None else int(pipeline_cfg.get("max_passes", 3))
 
     changes_path = resolve_path(project_root, paths_cfg.get("changes_report", "reports/changes.jsonl"))
     registry_path = resolve_path(project_root, paths_cfg.get("registry_report", "reports/registro_cambios.xlsx"))
@@ -558,6 +624,14 @@ def main() -> int:
         project_root,
         paths_cfg.get("embedded_header_footer_report_excel", "reports/embedded_header_footer_cleanup.xlsx"),
     )
+    normalization_report_jsonl_path = resolve_path(
+        project_root,
+        paths_cfg.get("format_normalization_report_jsonl", "reports/format_normalization.jsonl"),
+    )
+    normalization_report_excel_path = resolve_path(
+        project_root,
+        paths_cfg.get("format_normalization_report_excel", "reports/format_normalization.xlsx"),
+    )
 
     docx_inputs = _find_inputs(input_path)
     if not docx_inputs:
@@ -567,10 +641,14 @@ def main() -> int:
     all_changes: list[ChangeRecord] = []
     all_skips: list[SkipRecord] = []
     all_cleanup_records: list[EmbeddedArtifactRecord] = []
+    all_normalization_records: list[FormatNormalizationRecord] = []
     output_by_document: dict[str, Path] = {}
     for docx_path in docx_inputs:
         print(f"[document] {docx_path.name}", file=sys.stderr)
-        working_path, changes, skips, _summaries, cleanup_records = run_document(
+        snapshot_dir = args.snapshot_dir
+        if snapshot_dir and len(docx_inputs) > 1:
+            snapshot_dir = args.snapshot_dir / docx_path.stem
+        working_path, changes, skips, _summaries, cleanup_records, normalization_records = run_document(
             input_path=docx_path,
             output_dir=output_dir,
             config=config,
@@ -579,10 +657,12 @@ def main() -> int:
             dry_run=args.dry_run,
             simple_only=args.simple_only,
             force=args.force or bool(pipeline_cfg.get("overwrite_output", False)),
+            snapshot_dir=snapshot_dir,
         )
         all_changes.extend(changes)
         all_skips.extend(skips)
         all_cleanup_records.extend(cleanup_records)
+        all_normalization_records.extend(normalization_records)
         output_by_document[docx_path.name] = working_path
         print(f"[document] output={working_path}", file=sys.stderr)
 
@@ -605,12 +685,18 @@ def main() -> int:
         cleanup_cfg = config.get("pipeline", {}).get("embedded_header_footer_cleanup", {})
         if bool(cleanup_cfg.get("enabled", False)):
             write_embedded_artifact_report(all_cleanup_records, embedded_report_excel_path, embedded_report_jsonl_path)
+        normalization_cfg = config.get("pipeline", {}).get("format_normalization", {})
+        if bool(normalization_cfg.get("enabled", False)):
+            write_format_normalization_report(
+                all_normalization_records, normalization_report_excel_path, normalization_report_jsonl_path
+            )
         append_changes_jsonl(all_changes, changes_path)
         write_registry([], all_skips, registry_path, existing_jsonl=changes_path, audit_rows=audit_rows)
 
     print(
         f"Completed: {len(all_changes)} change(s), {len(all_skips)} skipped/review item(s), "
-        f"{len(all_cleanup_records)} embedded artifact candidate(s).",
+        f"{len(all_cleanup_records)} embedded artifact candidate(s), "
+        f"{sum(record.count for record in all_normalization_records)} format normalization action(s).",
         file=sys.stderr,
     )
     return 0
