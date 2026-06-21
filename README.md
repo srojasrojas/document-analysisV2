@@ -75,24 +75,25 @@ Correr sobre una carpeta de documentos:
 venv\Scripts\python.exe -m rule_engine.pipeline --config config.yaml --input tmp\run_b25 --output tmp\run_b25_no_llm_reviewed --passes 3 --force --simple-only
 ```
 
-Corrida recomendada para procesar `tmp/A` (todas las etapas activas por
-defecto: normalizacion de formato, limpieza embedded, reglas y post-auditoria):
+Corrida recomendada para procesar cualquier carpeta de entrada (todas las
+etapas activas por defecto: normalizacion de formato, limpieza embedded,
+reglas y post-auditoria):
 
 ```powershell
-venv\Scripts\python.exe -m rule_engine.pipeline --config config.yaml --input tmp\A --output tmp\run_A_full_pipeline --passes 3 --force --simple-only
+venv\Scripts\python.exe -m rule_engine.pipeline --config config.yaml --input <carpeta_entrada> --output <carpeta_salida> --passes 3 --force --simple-only
 ```
 
 Notas practicas para esta corrida:
 
-- El pipeline solo procesa `*.docx`; archivos `*.doc` dentro de `tmp\A` se
-    omiten.
+- El pipeline solo procesa `*.docx`; archivos `*.doc` dentro de
+    `<carpeta_entrada>` se omiten.
 - Si repites la corrida y quieres regenerar desde cero la salida, manten
     `--force`.
 
 Validar rapidamente que se generaron outputs:
 
 ```powershell
-Get-ChildItem tmp\run_A_full_pipeline -Filter *.docx
+Get-ChildItem <carpeta_salida> -Filter *.docx
 ```
 
 ## Etapa cero: normalizacion de formato
