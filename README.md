@@ -72,7 +72,7 @@ Si no pasas `--input`, el pipeline toma por defecto la carpeta `inputs/`.
 Correr sobre una carpeta de documentos:
 
 ```powershell
-venv\Scripts\python.exe -m rule_engine.pipeline --config config.yaml --input tmp\run_b25 --output tmp\run_b25_no_llm_reviewed --passes 3 --force --simple-only
+venv\Scripts\python.exe -m rule_engine.pipeline --config config.yaml --input <carpeta_entrada> --output <carpeta_salida> --passes 3 --force --simple-only
 ```
 
 Corrida recomendada para procesar cualquier carpeta de entrada (todas las
